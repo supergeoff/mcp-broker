@@ -1,0 +1,255 @@
+from collections.abc import Mapping
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+import httpx
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.middleware.sessions import SessionMiddleware
+
+from mcp_broker.config import Settings
+from mcp_broker.discovery import DiscoveryClient
+from mcp_broker.models import Base
+from mcp_broker.proxy import proxy_mcp_request
+from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
+from mcp_broker.storage import Repository, VaultRepository
+
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+def create_app(
+    *,
+    settings: Settings | None = None,
+    repository: Repository | None = None,
+    jwt_validator: Any | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> FastAPI:
+    settings = settings or Settings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if repository is None:
+            engine = create_async_engine(settings.database_url)
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            app.state.engine = engine
+            app.state.repository = VaultRepository(
+                session_factory,
+                FernetCipher(settings.secrets_encryption_key),
+            )
+
+        if http_client is None:
+            app.state.http_client = httpx.AsyncClient(timeout=None)
+
+        try:
+            yield
+        finally:
+            if http_client is None:
+                client = getattr(app.state, "http_client", None)
+                if client is not None:
+                    await client.aclose()
+            if repository is None:
+                engine = getattr(app.state, "engine", None)
+                if engine is not None:
+                    await engine.dispose()
+
+    app = FastAPI(title="mcp-broker", lifespan=lifespan)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.session_secret,
+        https_only=settings.cookie_secure,
+        same_site="lax",
+    )
+    app.state.settings = settings
+    app.state.repository = repository
+    app.state.jwt_validator = jwt_validator or JwtValidator(
+        issuer=settings.issuer,
+        audience=settings.expected_audience,
+        jwks_uri=settings.jwks_endpoint,
+    )
+    app.state.http_client = http_client
+    app.state.oauth = _oauth(settings)
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/.well-known/oauth-protected-resource")
+    @app.get("/.well-known/oauth-protected-resource/mcp")
+    async def protected_resource_metadata() -> dict[str, object]:
+        return {
+            "resource": f"{settings.public_url}/mcp",
+            "authorization_servers": [settings.oidc_issuer],
+            "bearer_methods_supported": ["header"],
+            "scopes_supported": [],
+            "resource_documentation": f"{settings.public_url}/",
+        }
+
+    @app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
+    async def mcp_root(request: Request):
+        return await _handle_mcp(request, "")
+
+    @app.api_route("/mcp/{subpath:path}", methods=["GET", "POST", "DELETE"])
+    async def mcp_subpath(request: Request, subpath: str):
+        return await _handle_mcp(request, subpath)
+
+    @app.get("/auth/login")
+    async def auth_login(request: Request):
+        redirect_uri = f"{settings.public_url}/auth/callback"
+        return await app.state.oauth.pocket_id.authorize_redirect(request, redirect_uri)
+
+    @app.get("/auth/callback")
+    async def auth_callback(request: Request):
+        token = await app.state.oauth.pocket_id.authorize_access_token(request)
+        userinfo = token.get("userinfo") or await app.state.oauth.pocket_id.userinfo(token=token)
+        sub = userinfo["sub"]
+        email = userinfo.get("email")
+        request.session["user"] = {"sub": sub, "email": email}
+        await _repository(app).upsert_user(sub, email)
+        return RedirectResponse("/")
+
+    @app.get("/auth/logout")
+    async def auth_logout(request: Request):
+        request.session.clear()
+        return RedirectResponse("/")
+
+    @app.get("/")
+    async def dashboard(request: Request):
+        user = _session_user(request)
+        if user is None:
+            return RedirectResponse("/auth/login")
+        repository = _repository(app)
+        litellm_key_saved = await repository.get_litellm_key(user["sub"]) is not None
+        secrets = await repository.get_secrets(user["sub"])
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {
+                "request": request,
+                "user": user,
+                "litellm_key_saved": litellm_key_saved,
+                "secrets": secrets,
+            },
+        )
+
+    @app.post("/api/litellm-key")
+    async def save_litellm_key(request: Request):
+        user = _require_session_user(request)
+        form = await request.form()
+        value = str(form.get("litellm_key", "")).strip()
+        if not value:
+            raise HTTPException(status_code=400, detail="LiteLLM key is required")
+        await _repository(app).upsert_litellm_key(user["sub"], value)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/api/discover")
+    async def discover(request: Request):
+        user = _require_session_user(request)
+        repository = _repository(app)
+        litellm_key = await repository.get_litellm_key(user["sub"])
+        if not litellm_key:
+            raise HTTPException(status_code=412, detail="Add your LiteLLM key first")
+        servers = await DiscoveryClient(settings, _http_client(app)).discover_for_user(litellm_key)
+        return templates.TemplateResponse(
+            "discover.html",
+            {"request": request, "servers": servers, "secrets": await repository.get_secrets(user["sub"])},
+        )
+
+    @app.post("/api/secret")
+    async def save_secret(request: Request):
+        user = _require_session_user(request)
+        form = await request.form()
+        header_name = str(form.get("header_name", "")).strip()
+        value = str(form.get("value", "")).strip()
+        if not header_name.startswith("X-") or not value:
+            raise HTTPException(status_code=400, detail="A X-... header name and value are required")
+        await _repository(app).upsert_secret(user["sub"], header_name, value)
+        return RedirectResponse("/", status_code=303)
+
+    @app.get("/admin")
+    async def admin(request: Request):
+        user = _require_session_user(request)
+        email = str(user.get("email") or "").lower()
+        if email not in settings.admin_emails:
+            raise HTTPException(status_code=403, detail="Admin only")
+        states = await _repository(app).list_user_states()
+        return templates.TemplateResponse(
+            "admin.html",
+            {"request": request, "user": user, "states": states},
+        )
+
+    async def _handle_mcp(request: Request, subpath: str):
+        token = _bearer_token(request.headers)
+        if token is None:
+            return _oauth_challenge(settings)
+        try:
+            claims = app.state.jwt_validator.verify(token)
+        except JwtValidationError:
+            return _oauth_challenge(settings)
+
+        await _repository(app).upsert_user(claims["sub"], claims.get("email"))
+        return await proxy_mcp_request(
+            request=request,
+            subpath=subpath,
+            user_sub=claims["sub"],
+            settings=settings,
+            repository=_repository(app),
+            http_client=_http_client(app),
+        )
+
+    return app
+
+
+def _oauth(settings: Settings) -> OAuth:
+    oauth = OAuth()
+    oauth.register(
+        name="pocket_id",
+        server_metadata_url=f"{settings.oidc_issuer}/.well-known/openid-configuration",
+        client_id=settings.ui_oidc_client_id,
+        client_secret=settings.ui_oidc_client_secret,
+        client_kwargs={"scope": "openid email profile"},
+    )
+    return oauth
+
+
+def _bearer_token(headers: Mapping[str, str]) -> str | None:
+    value = headers.get("authorization")
+    if not value or not value.lower().startswith("bearer "):
+        return None
+    return value.split(" ", 1)[1].strip()
+
+
+def _oauth_challenge(settings: Settings) -> JSONResponse:
+    return JSONResponse(
+        {"detail": "OAuth bearer token required"},
+        status_code=401,
+        headers={
+            "WWW-Authenticate": (
+                f'Bearer resource_metadata="{settings.public_url}/.well-known/oauth-protected-resource"'
+            )
+        },
+    )
+
+
+def _session_user(request: Request) -> dict[str, str] | None:
+    user = request.session.get("user")
+    return user if isinstance(user, dict) and "sub" in user else None
+
+
+def _require_session_user(request: Request) -> dict[str, str]:
+    user = _session_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Login required")
+    return user
+
+
+def _repository(app: FastAPI) -> Repository:
+    return app.state.repository
+
+
+def _http_client(app: FastAPI) -> httpx.AsyncClient:
+    return app.state.http_client

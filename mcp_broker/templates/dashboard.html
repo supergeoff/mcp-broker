@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>mcp-broker</title>
+    <script src="https://unpkg.com/htmx.org@2.0.7"></script>
+    <style>
+      :root { color-scheme: light dark; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; background: #f6f7f9; color: #182026; }
+      main { max-width: 920px; margin: 0 auto; padding: 32px 20px; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
+      h1 { font-size: 28px; margin: 0; }
+      h2 { font-size: 18px; margin: 0 0 12px; }
+      section { border-top: 1px solid #d9dee5; padding: 20px 0; }
+      label { display: block; font-weight: 650; margin-bottom: 6px; }
+      input { box-sizing: border-box; width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid #b9c1cc; border-radius: 6px; font: inherit; }
+      button, a.button { border: 0; border-radius: 6px; background: #1f6feb; color: white; padding: 9px 13px; font: inherit; text-decoration: none; cursor: pointer; }
+      .muted { color: #5f6b7a; }
+      .row { display: grid; grid-template-columns: minmax(180px, 1fr) 2fr auto; gap: 10px; align-items: end; }
+      .saved { color: #176f3d; font-weight: 650; }
+      @media (max-width: 680px) { .row { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>mcp-broker</h1>
+          <div class="muted">{{ user.email or user.sub }}</div>
+        </div>
+        <a class="button" href="/auth/logout">Logout</a>
+      </header>
+
+      <section>
+        <h2>LiteLLM key</h2>
+        {% if litellm_key_saved %}
+          <p class="saved">Saved</p>
+        {% else %}
+          <p class="muted">Required before connecting claude.ai.</p>
+        {% endif %}
+        <form method="post" action="/api/litellm-key">
+          <label for="litellm_key">LiteLLM API key</label>
+          <input id="litellm_key" name="litellm_key" type="password" autocomplete="off" required>
+          <p><button type="submit">Save</button></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>MCP discovery</h2>
+        <button type="button" hx-post="/api/discover" hx-target="#discover-results" hx-swap="innerHTML">
+          Refresh
+        </button>
+        <div id="discover-results"></div>
+      </section>
+
+      <section>
+        <h2>Saved headers</h2>
+        {% if secrets %}
+          <ul>
+            {% for header_name in secrets %}
+              <li><span class="saved">{{ header_name }}</span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="muted">No secret headers saved yet.</p>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

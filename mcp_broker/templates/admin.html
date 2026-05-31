@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>mcp-broker admin</title>
+    <style>
+      :root { color-scheme: light dark; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; background: #f6f7f9; color: #182026; }
+      main { max-width: 920px; margin: 0 auto; padding: 32px 20px; }
+      h1 { font-size: 28px; margin: 0 0 20px; }
+      table { width: 100%; border-collapse: collapse; background: white; }
+      th, td { border-bottom: 1px solid #d9dee5; padding: 10px; text-align: left; }
+      th { font-size: 13px; text-transform: uppercase; color: #5f6b7a; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Admin</h1>
+      <table>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>LiteLLM key</th>
+            <th>Headers</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for state in states %}
+            <tr>
+              <td>{{ state.email or state.sub }}</td>
+              <td>{{ "saved" if state.has_litellm_key else "missing" }}</td>
+              <td>{{ state.secret_count }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>
