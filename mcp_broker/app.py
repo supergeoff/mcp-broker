@@ -15,6 +15,7 @@ from mcp_broker.config import Settings
 from mcp_broker.discovery import DiscoveryClient
 from mcp_broker.models import Base
 from mcp_broker.proxy import proxy_mcp_request
+from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
 from mcp_broker.storage import Repository, VaultRepository
 
@@ -72,6 +73,7 @@ def create_app(
         audience=settings.expected_audience,
         jwks_uri=settings.jwks_endpoint,
     )
+    app.state.rate_limiter = FixedWindowRateLimiter(limit=settings.rate_limit_requests_per_minute)
     app.state.http_client = http_client
     app.state.oauth = _oauth(settings)
 
@@ -192,6 +194,8 @@ def create_app(
             return _oauth_challenge(settings)
 
         await _repository(app).upsert_user(claims["sub"], claims.get("email"))
+        if not app.state.rate_limiter.allow(claims["sub"]):
+            raise HTTPException(status_code=429, detail="Too many MCP requests. Try again later.")
         return await proxy_mcp_request(
             request=request,
             subpath=subpath,

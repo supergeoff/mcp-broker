@@ -11,6 +11,7 @@ This repository intentionally contains no runtime secrets. Configure deployments
 - Per-user encrypted LiteLLM key and `X-...` header vault.
 - Dynamic LiteLLM MCP discovery using admin catalog access plus user-key filtering.
 - Streaming reverse proxy to `/mcp` and `/mcp/{server}` with `Authorization` stripped and user headers injected.
+- In-memory per-user MCP request rate limit for mono-replica deployments.
 - Server-rendered Jinja2 UI with HTMX only.
 
 ## Deployment

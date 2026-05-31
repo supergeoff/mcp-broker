@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     litellm_base_url: str
     litellm_admin_key: str
     admin_emails: list[str] = Field(default_factory=list)
+    rate_limit_requests_per_minute: int = 120
 
     @field_validator("admin_emails", mode="before")
     @classmethod
