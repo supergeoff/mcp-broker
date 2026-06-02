@@ -5,14 +5,15 @@
       {% if server.required_headers %}
         {% for header_name in server.required_headers %}
           <form class="row" method="post" action="/api/secret">
+            <input type="hidden" name="mcp_name" value="{{ server.name }}">
             <input type="hidden" name="header_name" value="{{ header_name }}">
             <label>{{ header_name }}</label>
-            <input name="value" type="password" autocomplete="off" placeholder="{% if header_name in secrets %}Saved{% else %}Required{% endif %}" required>
+            <input name="value" type="password" autocomplete="off" placeholder="{% if header_name in secrets.get(server.name, ()) %}Saved{% else %}Required{% endif %}" required>
             <button type="submit">Save</button>
           </form>
         {% endfor %}
       {% else %}
-        <p class="muted">No user header required.</p>
+        <p class="muted">No header metadata advertised.</p>
       {% endif %}
     </section>
   {% endfor %}

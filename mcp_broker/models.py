@@ -32,11 +32,12 @@ class UserLiteLLMKey(Base):
 
 
 class UserSecret(Base):
-    __tablename__ = "user_secrets"
-    __table_args__ = (UniqueConstraint("user_sub", "header_name", name="uq_user_secret_header"),)
+    __tablename__ = "user_mcp_secrets"
+    __table_args__ = (UniqueConstraint("user_sub", "mcp_name", "header_name", name="uq_user_mcp_secret_header"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_sub: Mapped[str] = mapped_column(ForeignKey("users.sub"), index=True)
+    mcp_name: Mapped[str] = mapped_column(String(128), nullable=False)
     header_name: Mapped[str] = mapped_column(String(128), nullable=False)
     enc_value: Mapped[str] = mapped_column(Text, nullable=False)
 

@@ -1,6 +1,6 @@
 # mcp-broker
 
-Self-hosted MCP proxy that lets `claude.ai` connect to LiteLLM MCP servers through Pocket ID OAuth, while injecting per-user LiteLLM keys and per-user `X-...` secrets toward LiteLLM.
+Self-hosted MCP proxy that lets `claude.ai` connect to LiteLLM MCP servers through Pocket ID OAuth, while injecting per-user LiteLLM keys and per-user, per-MCP `X-...` secrets toward LiteLLM.
 
 This repository intentionally contains no runtime secrets. Configure deployments only with environment variables.
 
@@ -8,9 +8,9 @@ This repository intentionally contains no runtime secrets. Configure deployments
 
 - OAuth protected-resource metadata for claude.ai MCP discovery.
 - Pocket ID JWT validation through JWKS.
-- Per-user encrypted LiteLLM key and `X-...` header vault.
+- Per-user encrypted LiteLLM key and per-MCP `X-...` header vault.
 - Dynamic LiteLLM MCP discovery using admin catalog access plus user-key filtering.
-- Streaming reverse proxy to `/mcp` and `/mcp/{server}` with `Authorization` stripped and user headers injected.
+- Streaming reverse proxy from `/{server}` to the LiteLLM `/{server}/mcp` endpoint with `Authorization` stripped and only that server's user headers injected.
 - In-memory per-user MCP request rate limit for mono-replica deployments.
 - Server-rendered Jinja2 UI with HTMX only.
 
@@ -26,10 +26,11 @@ Generate the Fernet key outside the repository:
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-The claude.ai connector URL is:
+Claude connector URLs are one per LiteLLM MCP server:
 
 ```text
-https://your-broker-domain.example/mcp
+https://your-broker-domain.example/dokploy
+https://your-broker-domain.example/context7
 ```
 
 ## Development

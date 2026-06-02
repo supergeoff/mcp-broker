@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
+import re
 from typing import Any
 
 import httpx
@@ -20,6 +21,7 @@ from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
 from mcp_broker.storage import Repository, VaultRepository
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def create_app(
@@ -82,23 +84,28 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/.well-known/oauth-protected-resource")
-    @app.get("/.well-known/oauth-protected-resource/mcp")
     async def protected_resource_metadata() -> dict[str, object]:
         return {
-            "resource": f"{settings.public_url}/mcp",
+            "resource": settings.public_url,
             "authorization_servers": [settings.oidc_issuer],
             "bearer_methods_supported": ["header"],
             "scopes_supported": [],
             "resource_documentation": f"{settings.public_url}/",
         }
 
-    @app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
-    async def mcp_root(request: Request):
-        return await _handle_mcp(request, "")
+    @app.get("/.well-known/oauth-protected-resource/{mcp_name}")
+    async def named_protected_resource_metadata(mcp_name: str) -> dict[str, object]:
+        normalized_mcp_name = _normalize_mcp_name(mcp_name)
+        return _protected_resource_metadata(settings, normalized_mcp_name)
 
-    @app.api_route("/mcp/{subpath:path}", methods=["GET", "POST", "DELETE"])
-    async def mcp_subpath(request: Request, subpath: str):
-        return await _handle_mcp(request, subpath)
+    def _protected_resource_metadata(settings: Settings, mcp_name: str) -> dict[str, object]:
+        return {
+            "resource": f"{settings.public_url}/{mcp_name}",
+            "authorization_servers": [settings.oidc_issuer],
+            "bearer_methods_supported": ["header"],
+            "scopes_supported": [],
+            "resource_documentation": f"{settings.public_url}/",
+        }
 
     @app.get("/auth/login")
     async def auth_login(request: Request):
@@ -127,7 +134,7 @@ def create_app(
             return RedirectResponse("/auth/login")
         repository = _repository(app)
         litellm_key_saved = await repository.get_litellm_key(user["sub"]) is not None
-        secrets = await repository.get_secrets(user["sub"])
+        secrets = await repository.list_secret_headers(user["sub"])
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
@@ -160,18 +167,23 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="discover.html",
-            context={"request": request, "servers": servers, "secrets": await repository.get_secrets(user["sub"])},
+            context={
+                "request": request,
+                "servers": servers,
+                "secrets": await repository.list_secret_headers(user["sub"]),
+            },
         )
 
     @app.post("/api/secret")
     async def save_secret(request: Request):
         user = _require_session_user(request)
         form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
         header_name = str(form.get("header_name", "")).strip()
         value = str(form.get("value", "")).strip()
         if not header_name.startswith("X-") or not value:
             raise HTTPException(status_code=400, detail="A X-... header name and value are required")
-        await _repository(app).upsert_secret(user["sub"], header_name, value)
+        await _repository(app).upsert_secret(user["sub"], mcp_name, header_name, value)
         return RedirectResponse("/", status_code=303)
 
     @app.get("/admin")
@@ -187,20 +199,29 @@ def create_app(
             context={"request": request, "user": user, "states": states},
         )
 
-    async def _handle_mcp(request: Request, subpath: str):
+    @app.api_route("/{mcp_name}", methods=["GET", "POST", "DELETE"])
+    async def named_mcp_root(request: Request, mcp_name: str):
+        return await _handle_mcp(request, _normalize_mcp_name(mcp_name), "")
+
+    @app.api_route("/{mcp_name}/{subpath:path}", methods=["GET", "POST", "DELETE"])
+    async def named_mcp_subpath(request: Request, mcp_name: str, subpath: str):
+        return await _handle_mcp(request, _normalize_mcp_name(mcp_name), subpath)
+
+    async def _handle_mcp(request: Request, mcp_name: str, subpath: str):
         token = _bearer_token(request.headers)
         if token is None:
-            return _oauth_challenge(settings)
+            return _oauth_challenge(settings, mcp_name)
         try:
             claims = app.state.jwt_validator.verify(token)
         except JwtValidationError:
-            return _oauth_challenge(settings)
+            return _oauth_challenge(settings, mcp_name)
 
         await _repository(app).upsert_user(claims["sub"], claims.get("email"))
         if not app.state.rate_limiter.allow(claims["sub"]):
             raise HTTPException(status_code=429, detail="Too many MCP requests. Try again later.")
         return await proxy_mcp_request(
             request=request,
+            mcp_name=mcp_name,
             subpath=subpath,
             user_sub=claims["sub"],
             settings=settings,
@@ -230,16 +251,23 @@ def _bearer_token(headers: Mapping[str, str]) -> str | None:
     return value.split(" ", 1)[1].strip()
 
 
-def _oauth_challenge(settings: Settings) -> JSONResponse:
+def _oauth_challenge(settings: Settings, mcp_name: str) -> JSONResponse:
     return JSONResponse(
         {"detail": "OAuth bearer token required"},
         status_code=401,
         headers={
             "WWW-Authenticate": (
-                f'Bearer resource_metadata="{settings.public_url}/.well-known/oauth-protected-resource"'
+                f'Bearer resource_metadata="{settings.public_url}/.well-known/oauth-protected-resource/{mcp_name}"'
             )
         },
     )
+
+
+def _normalize_mcp_name(value: str) -> str:
+    normalized = value.strip().strip("/")
+    if not MCP_NAME_RE.fullmatch(normalized):
+        raise HTTPException(status_code=400, detail="MCP name must use letters, numbers, dot, dash, or underscore")
+    return normalized
 
 
 def _session_user(request: Request) -> dict[str, str] | None:

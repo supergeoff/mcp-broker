@@ -11,7 +11,9 @@ from mcp_broker.security import FernetCipher
 class Repository(Protocol):
     async def upsert_user(self, sub: str, email: str | None = None) -> None: ...
     async def get_litellm_key(self, user_sub: str) -> str | None: ...
-    async def get_secrets(self, user_sub: str) -> dict[str, str]: ...
+    async def upsert_secret(self, user_sub: str, mcp_name: str, header_name: str, value: str) -> None: ...
+    async def get_secrets(self, user_sub: str, mcp_name: str) -> dict[str, str]: ...
+    async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]: ...
 
 
 @dataclass(frozen=True)
@@ -54,14 +56,16 @@ class VaultRepository:
                 return None
             return self._cipher.decrypt(stored.enc_value)
 
-    async def upsert_secret(self, user_sub: str, header_name: str, value: str) -> None:
+    async def upsert_secret(self, user_sub: str, mcp_name: str, header_name: str, value: str) -> None:
         encrypted = self._cipher.encrypt(value)
+        normalized_mcp_name = mcp_name.strip()
         normalized_header = header_name.strip()
         async with self._session_factory() as session:
             await self._ensure_user(session, user_sub)
             stored = await session.scalar(
                 select(UserSecret).where(
                     UserSecret.user_sub == user_sub,
+                    UserSecret.mcp_name == normalized_mcp_name,
                     UserSecret.header_name == normalized_header,
                 )
             )
@@ -69,6 +73,7 @@ class VaultRepository:
                 session.add(
                     UserSecret(
                         user_sub=user_sub,
+                        mcp_name=normalized_mcp_name,
                         header_name=normalized_header,
                         enc_value=encrypted,
                     )
@@ -77,16 +82,35 @@ class VaultRepository:
                 stored.enc_value = encrypted
             await session.commit()
 
-    async def get_secrets(self, user_sub: str) -> dict[str, str]:
+    async def get_secrets(self, user_sub: str, mcp_name: str) -> dict[str, str]:
+        normalized_mcp_name = mcp_name.strip()
+        async with self._session_factory() as session:
+            rows = (
+                await session.scalars(
+                    select(UserSecret)
+                    .where(
+                        UserSecret.user_sub == user_sub,
+                        UserSecret.mcp_name == normalized_mcp_name,
+                    )
+                    .order_by(UserSecret.header_name)
+                )
+            ).all()
+            return {row.header_name: self._cipher.decrypt(row.enc_value) for row in rows}
+
+    async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]:
         async with self._session_factory() as session:
             rows = (
                 await session.scalars(
                     select(UserSecret)
                     .where(UserSecret.user_sub == user_sub)
-                    .order_by(UserSecret.header_name)
+                    .order_by(UserSecret.mcp_name, UserSecret.header_name)
                 )
             ).all()
-            return {row.header_name: self._cipher.decrypt(row.enc_value) for row in rows}
+
+        grouped: dict[str, list[str]] = {}
+        for row in rows:
+            grouped.setdefault(row.mcp_name, []).append(row.header_name)
+        return {mcp_name: tuple(headers) for mcp_name, headers in grouped.items()}
 
     async def list_user_states(self) -> list[UserConfigurationState]:
         async with self._session_factory() as session:

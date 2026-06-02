@@ -19,11 +19,17 @@ async def test_vault_repository_encrypts_and_upserts_user_values(encryption_key)
 
     await repository.upsert_user("pocket-sub", "user@example.com")
     await repository.upsert_litellm_key("pocket-sub", "litellm-user-key")
-    await repository.upsert_secret("pocket-sub", "X-DOKPLOY-TOKEN", "old-token")
-    await repository.upsert_secret("pocket-sub", "X-DOKPLOY-TOKEN", "new-token")
+    await repository.upsert_secret("pocket-sub", "dokploy", "X-DOKPLOY-TOKEN", "old-token")
+    await repository.upsert_secret("pocket-sub", "dokploy", "X-DOKPLOY-TOKEN", "new-token")
+    await repository.upsert_secret("pocket-sub", "context7", "X-DOKPLOY-TOKEN", "context-token")
 
     assert await repository.get_litellm_key("pocket-sub") == "litellm-user-key"
-    assert await repository.get_secrets("pocket-sub") == {"X-DOKPLOY-TOKEN": "new-token"}
+    assert await repository.get_secrets("pocket-sub", "dokploy") == {"X-DOKPLOY-TOKEN": "new-token"}
+    assert await repository.get_secrets("pocket-sub", "context7") == {"X-DOKPLOY-TOKEN": "context-token"}
+    assert await repository.list_secret_headers("pocket-sub") == {
+        "context7": ("X-DOKPLOY-TOKEN",),
+        "dokploy": ("X-DOKPLOY-TOKEN",),
+    }
 
     async with session_factory() as session:
         stored_key = await session.scalar(

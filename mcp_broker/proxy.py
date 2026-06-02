@@ -27,6 +27,7 @@ RESPONSE_BLOCKLIST = HOP_BY_HOP_HEADERS | {"set-cookie"}
 async def proxy_mcp_request(
     *,
     request: Request,
+    mcp_name: str,
     subpath: str,
     user_sub: str,
     settings: Settings,
@@ -40,8 +41,8 @@ async def proxy_mcp_request(
             detail=f"Vault incomplete. Open {settings.public_url}/ and add your LiteLLM key.",
         )
 
-    secrets = await repository.get_secrets(user_sub)
-    url = _upstream_url(settings, subpath, request.url.query)
+    secrets = await repository.get_secrets(user_sub, mcp_name)
+    url = _upstream_url(settings, mcp_name, subpath, request.url.query)
     upstream_request = http_client.build_request(
         request.method,
         url,
@@ -58,8 +59,8 @@ async def proxy_mcp_request(
     )
 
 
-def _upstream_url(settings: Settings, subpath: str, query: str) -> httpx.URL:
-    path = "/mcp" if not subpath else f"/mcp/{subpath}"
+def _upstream_url(settings: Settings, mcp_name: str, subpath: str, query: str) -> httpx.URL:
+    path = f"/{mcp_name}/mcp" if not subpath else f"/{mcp_name}/mcp/{subpath}"
     return httpx.URL(f"{settings.litellm_base_url}{path}").copy_with(query=query.encode("utf-8"))
 
 

@@ -48,10 +48,12 @@ class FakeRepository:
     def __init__(
         self,
         litellm_key: str | None = "litellm-user-key",
-        secrets: dict[str, str] | None = None,
+        secrets: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self.litellm_key = litellm_key
-        self.secrets = secrets or {"X-DOKPLOY-TOKEN": "dokploy-user-token"}
+        self.secrets = secrets or {
+            "dokploy": {"X-DOKPLOY-TOKEN": "dokploy-user-token"},
+        }
         self.users: list[tuple[str, str | None]] = []
 
     async def upsert_user(self, sub: str, email: str | None = None) -> None:
@@ -61,9 +63,17 @@ class FakeRepository:
         assert user_sub == "pocket-sub"
         return self.litellm_key
 
-    async def get_secrets(self, user_sub: str) -> dict[str, str]:
+    async def upsert_secret(self, user_sub: str, mcp_name: str, header_name: str, value: str) -> None:
         assert user_sub == "pocket-sub"
-        return self.secrets
+        self.secrets.setdefault(mcp_name, {})[header_name] = value
+
+    async def get_secrets(self, user_sub: str, mcp_name: str) -> dict[str, str]:
+        assert user_sub == "pocket-sub"
+        return self.secrets.get(mcp_name, {})
+
+    async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]:
+        assert user_sub == "pocket-sub"
+        return {mcp_name: tuple(headers) for mcp_name, headers in self.secrets.items()}
 
 
 @pytest.fixture

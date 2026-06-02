@@ -24,8 +24,8 @@ async def test_mcp_proxy_rate_limits_per_user(settings) -> None:
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
-        first = await client.post("/mcp", headers={"Authorization": "Bearer oauth-access-token"})
-        second = await client.post("/mcp", headers={"Authorization": "Bearer oauth-access-token"})
+        first = await client.post("/dokploy", headers={"Authorization": "Bearer oauth-access-token"})
+        second = await client.post("/dokploy", headers={"Authorization": "Bearer oauth-access-token"})
 
     assert first.status_code == 200
     assert second.status_code == 429

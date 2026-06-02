@@ -57,14 +57,34 @@
       <section>
         <h2>Saved headers</h2>
         {% if secrets %}
-          <ul>
-            {% for header_name in secrets %}
-              <li><span class="saved">{{ header_name }}</span></li>
-            {% endfor %}
-          </ul>
+          {% for mcp_name, header_names in secrets.items() %}
+            <h3>{{ mcp_name }}</h3>
+            <ul>
+              {% for header_name in header_names %}
+                <li><span class="saved">{{ header_name }}</span></li>
+              {% endfor %}
+            </ul>
+          {% endfor %}
         {% else %}
           <p class="muted">No secret headers saved yet.</p>
         {% endif %}
+        <form method="post" action="/api/secret">
+          <div class="row">
+            <div>
+              <label for="mcp_name">MCP name</label>
+              <input id="mcp_name" name="mcp_name" autocomplete="off" placeholder="dokploy" required>
+            </div>
+            <div>
+              <label for="header_name">Header name</label>
+              <input id="header_name" name="header_name" autocomplete="off" placeholder="X-DOKPLOY_API_KEY" required>
+            </div>
+            <div>
+              <label for="value">Secret value</label>
+              <input id="value" name="value" type="password" autocomplete="off" required>
+            </div>
+          </div>
+          <p><button type="submit">Save</button></p>
+        </form>
       </section>
     </main>
   </body>
