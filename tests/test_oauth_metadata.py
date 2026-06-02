@@ -6,6 +6,19 @@ from mcp_broker.app import create_app
 pytestmark = pytest.mark.anyio
 
 
+async def test_root_protected_resource_metadata_advertises_pocket_id_scopes(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/.well-known/oauth-protected-resource")
+
+    assert response.status_code == 200
+    assert response.json()["scopes_supported"] == ["openid", "email", "profile"]
+
+
 async def test_named_protected_resource_metadata_points_claude_to_pocket_id(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
 
@@ -20,7 +33,7 @@ async def test_named_protected_resource_metadata_points_claude_to_pocket_id(sett
         "resource": "https://broker.example.com/dokploy",
         "authorization_servers": ["https://id.example.com"],
         "bearer_methods_supported": ["header"],
-        "scopes_supported": [],
+        "scopes_supported": ["openid", "email", "profile"],
         "resource_documentation": "https://broker.example.com/",
     }
 

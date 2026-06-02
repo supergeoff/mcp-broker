@@ -24,6 +24,7 @@ from mcp_broker.storage import McpServerConfiguration, Repository, VaultReposito
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 RESERVED_MCP_NAMES = {"admin", "api", "auth", "favicon.ico", "healthz", "mcp"}
+OIDC_SCOPES_SUPPORTED = ["openid", "email", "profile"]
 
 
 def create_app(
@@ -91,7 +92,7 @@ def create_app(
             "resource": settings.public_url,
             "authorization_servers": [settings.oidc_issuer],
             "bearer_methods_supported": ["header"],
-            "scopes_supported": [],
+            "scopes_supported": OIDC_SCOPES_SUPPORTED,
             "resource_documentation": f"{settings.public_url}/",
         }
 
@@ -126,7 +127,7 @@ def create_app(
             "resource": f"{settings.public_url}/{mcp_name}",
             "authorization_servers": [settings.oidc_issuer],
             "bearer_methods_supported": ["header"],
-            "scopes_supported": [],
+            "scopes_supported": OIDC_SCOPES_SUPPORTED,
             "resource_documentation": f"{settings.public_url}/",
         }
 
