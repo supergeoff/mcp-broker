@@ -1,22 +1,32 @@
 {% if servers %}
   {% for server in servers %}
-    <section>
-      <h2>{{ server.name }}</h2>
+    <div class="server-card">
+      <h3 class="server-title">{{ server.name }}</h3>
       {% if server.required_headers %}
-        {% for header_name in server.required_headers %}
-          <form class="row" method="post" action="/api/secret">
-            <input type="hidden" name="mcp_name" value="{{ server.name }}">
-            <input type="hidden" name="header_name" value="{{ header_name }}">
-            <label>{{ header_name }}</label>
-            <input name="value" type="password" autocomplete="off" placeholder="{% if header_name in secrets.get(server.name, ()) %}Saved{% else %}Required{% endif %}" required>
-            <button type="submit">Save</button>
-          </form>
-        {% endfor %}
+        <div class="form-grid">
+          {% for header_name in server.required_headers %}
+            <form class="row" method="post" action="/api/secret">
+              <input type="hidden" name="mcp_name" value="{{ server.name }}">
+              <input type="hidden" name="header_name" value="{{ header_name }}">
+              <div class="field">
+                <label>{{ header_name }}</label>
+                <span class="{% if header_name in secrets.get(server.name, ()) %}status-badge status-saved{% else %}status-badge status-missing{% endif %}">
+                  {% if header_name in secrets.get(server.name, ()) %}Saved{% else %}Required{% endif %}
+                </span>
+              </div>
+              <div class="field">
+                <label for="secret-{{ server.name }}-{{ loop.index }}">Secret value</label>
+                <input id="secret-{{ server.name }}-{{ loop.index }}" name="value" type="password" autocomplete="off" required>
+              </div>
+              <button class="button button-primary" type="submit">Save</button>
+            </form>
+          {% endfor %}
+        </div>
       {% else %}
-        <p class="muted">No header metadata advertised.</p>
+        <div class="empty-state">No header metadata advertised.</div>
       {% endif %}
-    </section>
+    </div>
   {% endfor %}
 {% else %}
-  <p class="muted">No accessible MCP server found for this key.</p>
+  <div class="empty-state">No accessible MCP server found for this key.</div>
 {% endif %}

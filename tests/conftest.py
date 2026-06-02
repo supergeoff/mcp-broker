@@ -4,6 +4,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from mcp_broker.config import Settings
+from mcp_broker.storage import UserConfigurationState
 
 
 @pytest.fixture
@@ -74,6 +75,16 @@ class FakeRepository:
     async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]:
         assert user_sub == "pocket-sub"
         return {mcp_name: tuple(headers) for mcp_name, headers in self.secrets.items()}
+
+    async def list_user_states(self) -> list[UserConfigurationState]:
+        return [
+            UserConfigurationState(
+                sub="pocket-sub",
+                email="admin@example.com",
+                has_litellm_key=self.litellm_key is not None,
+                secret_count=sum(len(headers) for headers in self.secrets.values()),
+            )
+        ]
 
 
 @pytest.fixture

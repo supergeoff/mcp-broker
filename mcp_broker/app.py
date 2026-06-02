@@ -136,6 +136,8 @@ def create_app(
         repository = _repository(app)
         litellm_key_saved = await repository.get_litellm_key(user["sub"]) is not None
         secrets = await repository.list_secret_headers(user["sub"])
+        email = str(user.get("email") or "").lower()
+        is_admin = email in settings.admin_emails
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
@@ -144,6 +146,8 @@ def create_app(
                 "user": user,
                 "litellm_key_saved": litellm_key_saved,
                 "secrets": secrets,
+                "current_page": "dashboard",
+                "is_admin": is_admin,
             },
         )
 
@@ -197,7 +201,13 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="admin.html",
-            context={"request": request, "user": user, "states": states},
+            context={
+                "request": request,
+                "user": user,
+                "states": states,
+                "current_page": "admin",
+                "is_admin": True,
+            },
         )
 
     @app.api_route("/{mcp_name}", methods=["GET", "POST", "DELETE"])
