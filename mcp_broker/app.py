@@ -22,6 +22,7 @@ from mcp_broker.storage import Repository, VaultRepository
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+RESERVED_MCP_NAMES = {"admin", "api", "auth", "favicon.ico", "healthz", "mcp"}
 
 
 def create_app(
@@ -265,6 +266,8 @@ def _oauth_challenge(settings: Settings, mcp_name: str) -> JSONResponse:
 
 def _normalize_mcp_name(value: str) -> str:
     normalized = value.strip().strip("/")
+    if normalized.lower() in RESERVED_MCP_NAMES:
+        raise HTTPException(status_code=404, detail="MCP server not found")
     if not MCP_NAME_RE.fullmatch(normalized):
         raise HTTPException(status_code=400, detail="MCP name must use letters, numbers, dot, dash, or underscore")
     return normalized

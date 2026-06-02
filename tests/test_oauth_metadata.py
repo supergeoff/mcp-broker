@@ -39,3 +39,15 @@ async def test_named_mcp_without_bearer_token_returns_oauth_challenge(settings, 
     assert response.headers["www-authenticate"] == (
         'Bearer resource_metadata="https://broker.example.com/.well-known/oauth-protected-resource/dokploy"'
     )
+
+
+async def test_legacy_mcp_path_is_reserved(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post("/mcp", content=b"{}")
+
+    assert response.status_code == 404
