@@ -1,7 +1,8 @@
 from functools import cached_property
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
     expected_audience: str
     litellm_base_url: str
     litellm_admin_key: str
-    admin_emails: list[str] = Field(default_factory=list)
+    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
     rate_limit_requests_per_minute: int = 120
 
     @field_validator("admin_emails", mode="before")
