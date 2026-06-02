@@ -129,8 +129,9 @@ def create_app(
         litellm_key_saved = await repository.get_litellm_key(user["sub"]) is not None
         secrets = await repository.get_secrets(user["sub"])
         return templates.TemplateResponse(
-            "dashboard.html",
-            {
+            request=request,
+            name="dashboard.html",
+            context={
                 "request": request,
                 "user": user,
                 "litellm_key_saved": litellm_key_saved,
@@ -157,8 +158,9 @@ def create_app(
             raise HTTPException(status_code=412, detail="Add your LiteLLM key first")
         servers = await DiscoveryClient(settings, _http_client(app)).discover_for_user(litellm_key)
         return templates.TemplateResponse(
-            "discover.html",
-            {"request": request, "servers": servers, "secrets": await repository.get_secrets(user["sub"])},
+            request=request,
+            name="discover.html",
+            context={"request": request, "servers": servers, "secrets": await repository.get_secrets(user["sub"])},
         )
 
     @app.post("/api/secret")
@@ -180,8 +182,9 @@ def create_app(
             raise HTTPException(status_code=403, detail="Admin only")
         states = await _repository(app).list_user_states()
         return templates.TemplateResponse(
-            "admin.html",
-            {"request": request, "user": user, "states": states},
+            request=request,
+            name="admin.html",
+            context={"request": request, "user": user, "states": states},
         )
 
     async def _handle_mcp(request: Request, subpath: str):
