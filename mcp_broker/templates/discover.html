@@ -1,7 +1,34 @@
 {% if servers %}
   {% for server in servers %}
     <div class="server-card">
-      <h3 class="server-title">{{ server.name }}</h3>
+      <div class="server-card-header">
+        <div>
+          <h3 class="server-title">{{ server.name }}</h3>
+          <div class="badge-list">
+            {% if server.auth_type %}
+              <span class="badge">{{ server.auth_type }}</span>
+            {% endif %}
+            {% if server.delegated_auth_passthrough %}
+              <span class="status-badge status-saved">PKCE passthrough</span>
+            {% else %}
+              <span class="status-badge status-missing">Broker auth</span>
+            {% endif %}
+          </div>
+        </div>
+        <form class="toggle-form" method="post" action="/api/mcp/delegated-auth">
+          <input type="hidden" name="mcp_name" value="{{ server.name }}">
+          <label class="checkbox-field">
+            <input
+              type="checkbox"
+              name="delegated_auth_passthrough"
+              {% if server.delegated_auth_passthrough %}checked{% endif %}
+              {% if not is_admin %}disabled{% endif %}
+              onchange="this.form.submit()"
+            >
+            <span>PKCE passthrough</span>
+          </label>
+        </form>
+      </div>
       {% if server.required_headers %}
         <div class="form-grid">
           {% for header_name in server.required_headers %}
@@ -25,8 +52,20 @@
       {% else %}
         <div class="empty-state">No header metadata advertised.</div>
       {% endif %}
+      <form class="row manual-secret-row" method="post" action="/api/secret">
+        <input type="hidden" name="mcp_name" value="{{ server.name }}">
+        <div class="field">
+          <label for="manual-header-{{ server.name }}">Header name</label>
+          <input id="manual-header-{{ server.name }}" name="header_name" autocomplete="off" placeholder="X-API-KEY" required>
+        </div>
+        <div class="field">
+          <label for="manual-secret-{{ server.name }}">Secret value</label>
+          <input id="manual-secret-{{ server.name }}" name="value" type="password" autocomplete="off" required>
+        </div>
+        <button class="button button-secondary" type="submit">Save header</button>
+      </form>
     </div>
   {% endfor %}
 {% else %}
-  <div class="empty-state">No accessible MCP server found for this key.</div>
+  <div class="empty-state">No discovered MCP server yet.</div>
 {% endif %}

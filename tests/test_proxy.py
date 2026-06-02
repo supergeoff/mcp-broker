@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from mcp_broker.app import create_app
+from mcp_broker.storage import McpServerConfiguration
 from tests.conftest import FakeJwtValidator, FakeRepository
 
 pytestmark = pytest.mark.anyio
@@ -145,3 +146,140 @@ async def test_proxy_returns_412_when_user_vault_is_not_ready(settings) -> None:
     assert response.json() == {
         "detail": "Vault incomplete. Open https://broker.example.com/ and add your LiteLLM key."
     }
+
+
+async def test_delegated_auth_mcp_proxies_without_pocket_id_and_preserves_authorization(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["headers"] = dict(request.headers)
+        captured["body"] = await request.aread()
+        return httpx.Response(200, content=b"delegated-ok")
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "github": McpServerConfiguration(
+                    name="github",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                )
+            }
+        ),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/github",
+            headers={"Authorization": "Bearer upstream-oauth-token"},
+            content=b'{"jsonrpc":"2.0"}',
+        )
+
+    assert response.status_code == 200
+    assert response.text == "delegated-ok"
+    assert captured["path"] == "/github/mcp"
+    assert captured["body"] == b'{"jsonrpc":"2.0"}'
+    assert captured["headers"]["authorization"] == "Bearer upstream-oauth-token"
+    assert "x-litellm-api-key" not in captured["headers"]
+
+
+async def test_delegated_auth_metadata_is_proxied_to_litellm_legacy_mcp_oauth_endpoint(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "resource": "https://litellm.example.com/github/mcp",
+                "authorization_servers": [
+                    "https://litellm.example.com/.well-known/oauth-authorization-server/github/mcp"
+                ],
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "github": McpServerConfiguration(
+                    name="github",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/.well-known/oauth-protected-resource/github")
+
+    assert response.status_code == 200
+    assert captured["path"] == "/.well-known/oauth-protected-resource/github/mcp"
+    assert response.json() == {
+        "resource": "https://broker.example.com/github",
+        "authorization_servers": [
+            "https://broker.example.com/.well-known/oauth-authorization-server/github"
+        ],
+    }
+
+
+async def test_delegated_auth_oauth_endpoints_proxy_to_litellm_without_litellm_key(settings) -> None:
+    captured: list[tuple[str, str, bytes, dict[str, str]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.url.path, await request.aread(), dict(request.headers)))
+        if request.url.path == "/github/authorize":
+            return httpx.Response(302, headers={"location": "https://oauth.example.com/authorize"})
+        return httpx.Response(200, json={"access_token": "token"})
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "github": McpServerConfiguration(
+                    name="github",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        follow_redirects=False,
+    ) as client:
+        authorize_response = await client.get("/github/authorize?client_id=claude")
+        token_response = await client.post(
+            "/github/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            content=b"grant_type=authorization_code&code=abc",
+        )
+
+    assert authorize_response.status_code == 302
+    assert authorize_response.headers["location"] == "https://oauth.example.com/authorize"
+    assert token_response.status_code == 200
+    assert captured[0][0] == "GET"
+    assert captured[0][1] == "/github/authorize"
+    assert captured[1][0] == "POST"
+    assert captured[1][1] == "/github/token"
+    assert captured[1][2] == b"grant_type=authorization_code&code=abc"
+    assert "x-litellm-api-key" not in captured[0][3]
+    assert "x-litellm-api-key" not in captured[1][3]

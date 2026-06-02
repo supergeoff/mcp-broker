@@ -1,10 +1,11 @@
 from dataclasses import dataclass
+import json
 from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from mcp_broker.models import User, UserLiteLLMKey, UserSecret
+from mcp_broker.models import McpServer, User, UserLiteLLMKey, UserSecret
 from mcp_broker.security import FernetCipher
 
 
@@ -14,6 +15,10 @@ class Repository(Protocol):
     async def upsert_secret(self, user_sub: str, mcp_name: str, header_name: str, value: str) -> None: ...
     async def get_secrets(self, user_sub: str, mcp_name: str) -> dict[str, str]: ...
     async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]: ...
+    async def upsert_mcp_servers(self, servers: list["McpServerConfiguration"]) -> None: ...
+    async def get_mcp_server(self, mcp_name: str) -> "McpServerConfiguration | None": ...
+    async def list_mcp_servers(self) -> list["McpServerConfiguration"]: ...
+    async def set_mcp_delegated_auth(self, mcp_name: str, enabled: bool) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,14 @@ class UserConfigurationState:
     email: str | None
     has_litellm_key: bool
     secret_count: int
+
+
+@dataclass(frozen=True)
+class McpServerConfiguration:
+    name: str
+    required_headers: tuple[str, ...]
+    delegated_auth_passthrough: bool = False
+    auth_type: str | None = None
 
 
 class VaultRepository:
@@ -112,6 +125,55 @@ class VaultRepository:
             grouped.setdefault(row.mcp_name, []).append(row.header_name)
         return {mcp_name: tuple(headers) for mcp_name, headers in grouped.items()}
 
+    async def upsert_mcp_servers(self, servers: list[McpServerConfiguration]) -> None:
+        async with self._session_factory() as session:
+            for server in servers:
+                normalized = _normalize_mcp_server_configuration(server)
+                stored = await session.get(McpServer, normalized.name)
+                required_headers_json = json.dumps(list(normalized.required_headers))
+                if stored is None:
+                    session.add(
+                        McpServer(
+                            name=normalized.name,
+                            required_headers_json=required_headers_json,
+                            delegated_auth_passthrough=normalized.delegated_auth_passthrough,
+                            auth_type=normalized.auth_type,
+                        )
+                    )
+                else:
+                    stored.required_headers_json = required_headers_json
+                    stored.delegated_auth_passthrough = normalized.delegated_auth_passthrough
+                    stored.auth_type = normalized.auth_type
+            await session.commit()
+
+    async def get_mcp_server(self, mcp_name: str) -> McpServerConfiguration | None:
+        async with self._session_factory() as session:
+            stored = await session.get(McpServer, mcp_name.strip())
+            if stored is None:
+                return None
+            return _mcp_server_configuration_from_row(stored)
+
+    async def list_mcp_servers(self) -> list[McpServerConfiguration]:
+        async with self._session_factory() as session:
+            rows = (await session.scalars(select(McpServer).order_by(McpServer.name))).all()
+            return [_mcp_server_configuration_from_row(row) for row in rows]
+
+    async def set_mcp_delegated_auth(self, mcp_name: str, enabled: bool) -> None:
+        normalized_name = mcp_name.strip()
+        async with self._session_factory() as session:
+            stored = await session.get(McpServer, normalized_name)
+            if stored is None:
+                session.add(
+                    McpServer(
+                        name=normalized_name,
+                        required_headers_json="[]",
+                        delegated_auth_passthrough=enabled,
+                    )
+                )
+            else:
+                stored.delegated_auth_passthrough = enabled
+            await session.commit()
+
     async def list_user_states(self) -> list[UserConfigurationState]:
         async with self._session_factory() as session:
             users = (await session.scalars(select(User).order_by(User.email, User.sub))).all()
@@ -140,3 +202,25 @@ class VaultRepository:
         if user is None:
             session.add(User(sub=sub))
             await session.flush()
+
+
+def _normalize_mcp_server_configuration(server: McpServerConfiguration) -> McpServerConfiguration:
+    return McpServerConfiguration(
+        name=server.name.strip(),
+        required_headers=tuple(sorted({header.strip() for header in server.required_headers if header.strip()})),
+        delegated_auth_passthrough=server.delegated_auth_passthrough,
+        auth_type=server.auth_type,
+    )
+
+
+def _mcp_server_configuration_from_row(row: McpServer) -> McpServerConfiguration:
+    try:
+        headers = json.loads(row.required_headers_json)
+    except json.JSONDecodeError:
+        headers = []
+    return McpServerConfiguration(
+        name=row.name,
+        required_headers=tuple(sorted(str(header) for header in headers if str(header).strip())),
+        delegated_auth_passthrough=row.delegated_auth_passthrough,
+        auth_type=row.auth_type,
+    )

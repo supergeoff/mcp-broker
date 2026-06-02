@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -42,3 +42,12 @@ class UserSecret(Base):
     enc_value: Mapped[str] = mapped_column(Text, nullable=False)
 
     user: Mapped[User] = relationship(back_populates="secrets")
+
+
+class McpServer(Base):
+    __tablename__ = "mcp_servers"
+
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    required_headers_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    delegated_auth_passthrough: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auth_type: Mapped[str | None] = mapped_column(String(64), nullable=True)

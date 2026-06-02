@@ -4,6 +4,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from mcp_broker.config import Settings
+from mcp_broker.storage import McpServerConfiguration
 from mcp_broker.storage import UserConfigurationState
 
 
@@ -50,11 +51,13 @@ class FakeRepository:
         self,
         litellm_key: str | None = "litellm-user-key",
         secrets: dict[str, dict[str, str]] | None = None,
+        mcp_servers: dict[str, McpServerConfiguration] | None = None,
     ) -> None:
         self.litellm_key = litellm_key
         self.secrets = secrets or {
             "dokploy": {"X-DOKPLOY-TOKEN": "dokploy-user-token"},
         }
+        self.mcp_servers = mcp_servers or {}
         self.users: list[tuple[str, str | None]] = []
 
     async def upsert_user(self, sub: str, email: str | None = None) -> None:
@@ -75,6 +78,30 @@ class FakeRepository:
     async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]:
         assert user_sub == "pocket-sub"
         return {mcp_name: tuple(headers) for mcp_name, headers in self.secrets.items()}
+
+    async def upsert_mcp_servers(self, servers: list[McpServerConfiguration]) -> None:
+        for server in servers:
+            self.mcp_servers[server.name] = McpServerConfiguration(
+                name=server.name,
+                required_headers=tuple(sorted(server.required_headers)),
+                delegated_auth_passthrough=server.delegated_auth_passthrough,
+                auth_type=server.auth_type,
+            )
+
+    async def get_mcp_server(self, mcp_name: str) -> McpServerConfiguration | None:
+        return self.mcp_servers.get(mcp_name)
+
+    async def list_mcp_servers(self) -> list[McpServerConfiguration]:
+        return sorted(self.mcp_servers.values(), key=lambda server: server.name)
+
+    async def set_mcp_delegated_auth(self, mcp_name: str, enabled: bool) -> None:
+        existing = self.mcp_servers.get(mcp_name)
+        self.mcp_servers[mcp_name] = McpServerConfiguration(
+            name=mcp_name,
+            required_headers=existing.required_headers if existing else (),
+            delegated_auth_passthrough=enabled,
+            auth_type=existing.auth_type if existing else None,
+        )
 
     async def list_user_states(self) -> list[UserConfigurationState]:
         return [

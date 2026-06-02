@@ -15,10 +15,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from mcp_broker.config import Settings
 from mcp_broker.discovery import DiscoveryClient
 from mcp_broker.models import Base
-from mcp_broker.proxy import proxy_mcp_request
+from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
+from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
 from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
-from mcp_broker.storage import Repository, VaultRepository
+from mcp_broker.storage import McpServerConfiguration, Repository, VaultRepository
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -95,9 +96,30 @@ def create_app(
         }
 
     @app.get("/.well-known/oauth-protected-resource/{mcp_name}")
-    async def named_protected_resource_metadata(mcp_name: str) -> dict[str, object]:
+    async def named_protected_resource_metadata(request: Request, mcp_name: str):
         normalized_mcp_name = _normalize_mcp_name(mcp_name)
+        if await _is_delegated_mcp(app, normalized_mcp_name):
+            return await proxy_delegated_oauth_metadata_request(
+                request=request,
+                mcp_name=normalized_mcp_name,
+                path=f"/.well-known/oauth-protected-resource/{normalized_mcp_name}/mcp",
+                settings=settings,
+                http_client=_http_client(app),
+            )
         return _protected_resource_metadata(settings, normalized_mcp_name)
+
+    @app.get("/.well-known/oauth-authorization-server/{mcp_name}")
+    async def named_authorization_server_metadata(request: Request, mcp_name: str):
+        normalized_mcp_name = _normalize_mcp_name(mcp_name)
+        if not await _is_delegated_mcp(app, normalized_mcp_name):
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        return await proxy_delegated_oauth_metadata_request(
+            request=request,
+            mcp_name=normalized_mcp_name,
+            path=f"/.well-known/oauth-authorization-server/{normalized_mcp_name}/mcp",
+            settings=settings,
+            http_client=_http_client(app),
+        )
 
     def _protected_resource_metadata(settings: Settings, mcp_name: str) -> dict[str, object]:
         return {
@@ -138,6 +160,7 @@ def create_app(
         secrets = await repository.list_secret_headers(user["sub"])
         email = str(user.get("email") or "").lower()
         is_admin = email in settings.admin_emails
+        mcp_servers = await repository.list_mcp_servers()
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
@@ -146,6 +169,7 @@ def create_app(
                 "user": user,
                 "litellm_key_saved": litellm_key_saved,
                 "secrets": secrets,
+                "servers": mcp_servers,
                 "current_page": "dashboard",
                 "is_admin": is_admin,
             },
@@ -168,7 +192,11 @@ def create_app(
         litellm_key = await repository.get_litellm_key(user["sub"])
         if not litellm_key:
             raise HTTPException(status_code=412, detail="Add your LiteLLM key first")
-        servers = await DiscoveryClient(settings, _http_client(app)).discover_for_user(litellm_key)
+        discovery = DiscoveryClient(settings, _http_client(app))
+        catalog = await discovery.discover_catalog()
+        await repository.upsert_mcp_servers(_mcp_server_configurations(catalog))
+        servers = await discovery.discover_for_user(litellm_key, catalog)
+        email = str(user.get("email") or "").lower()
         return templates.TemplateResponse(
             request=request,
             name="discover.html",
@@ -176,6 +204,7 @@ def create_app(
                 "request": request,
                 "servers": servers,
                 "secrets": await repository.list_secret_headers(user["sub"]),
+                "is_admin": email in settings.admin_emails,
             },
         )
 
@@ -189,6 +218,17 @@ def create_app(
         if not header_name.startswith("X-") or not value:
             raise HTTPException(status_code=400, detail="A X-... header name and value are required")
         await _repository(app).upsert_secret(user["sub"], mcp_name, header_name, value)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/api/mcp/delegated-auth")
+    async def save_mcp_delegated_auth(request: Request):
+        user = _require_session_user(request)
+        if not _is_admin_user(user, settings):
+            raise HTTPException(status_code=403, detail="Admin only")
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
+        enabled = str(form.get("delegated_auth_passthrough", "")).lower() in {"1", "true", "on", "yes"}
+        await _repository(app).set_mcp_delegated_auth(mcp_name, enabled)
         return RedirectResponse("/", status_code=303)
 
     @app.get("/admin")
@@ -210,6 +250,18 @@ def create_app(
             },
         )
 
+    @app.api_route("/{mcp_name}/authorize", methods=["GET"])
+    async def delegated_authorize(request: Request, mcp_name: str):
+        return await _handle_delegated_oauth_endpoint(request, _normalize_mcp_name(mcp_name), "authorize")
+
+    @app.api_route("/{mcp_name}/token", methods=["POST"])
+    async def delegated_token(request: Request, mcp_name: str):
+        return await _handle_delegated_oauth_endpoint(request, _normalize_mcp_name(mcp_name), "token")
+
+    @app.api_route("/{mcp_name}/register", methods=["POST"])
+    async def delegated_register(request: Request, mcp_name: str):
+        return await _handle_delegated_oauth_endpoint(request, _normalize_mcp_name(mcp_name), "register")
+
     @app.api_route("/{mcp_name}", methods=["GET", "POST", "DELETE"])
     async def named_mcp_root(request: Request, mcp_name: str):
         return await _handle_mcp(request, _normalize_mcp_name(mcp_name), "")
@@ -219,6 +271,15 @@ def create_app(
         return await _handle_mcp(request, _normalize_mcp_name(mcp_name), subpath)
 
     async def _handle_mcp(request: Request, mcp_name: str, subpath: str):
+        if await _is_delegated_mcp(app, mcp_name):
+            return await proxy_delegated_mcp_request(
+                request=request,
+                mcp_name=mcp_name,
+                subpath=subpath,
+                settings=settings,
+                http_client=_http_client(app),
+            )
+
         token = _bearer_token(request.headers)
         if token is None:
             return _oauth_challenge(settings, mcp_name)
@@ -240,6 +301,16 @@ def create_app(
             http_client=_http_client(app),
         )
 
+    async def _handle_delegated_oauth_endpoint(request: Request, mcp_name: str, endpoint: str):
+        if not await _is_delegated_mcp(app, mcp_name):
+            return await _handle_mcp(request, mcp_name, endpoint)
+        return await proxy_delegated_litellm_request(
+            request=request,
+            path=f"/{mcp_name}/{endpoint}",
+            settings=settings,
+            http_client=_http_client(app),
+        )
+
     return app
 
 
@@ -253,6 +324,27 @@ def _oauth(settings: Settings) -> OAuth:
         client_kwargs={"scope": "openid email profile"},
     )
     return oauth
+
+
+def _mcp_server_configurations(servers: list[Any]) -> list[McpServerConfiguration]:
+    return [
+        McpServerConfiguration(
+            name=server.name,
+            required_headers=server.required_headers,
+            delegated_auth_passthrough=server.delegated_auth_passthrough,
+            auth_type=server.auth_type,
+        )
+        for server in servers
+    ]
+
+
+async def _is_delegated_mcp(app: FastAPI, mcp_name: str) -> bool:
+    server = await _repository(app).get_mcp_server(mcp_name)
+    return bool(server and server.delegated_auth_passthrough)
+
+
+def _is_admin_user(user: Mapping[str, str], settings: Settings) -> bool:
+    return str(user.get("email") or "").lower() in settings.admin_emails
 
 
 def _bearer_token(headers: Mapping[str, str]) -> str | None:

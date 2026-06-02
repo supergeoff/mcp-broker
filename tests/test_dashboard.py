@@ -6,6 +6,7 @@ import pytest
 from itsdangerous import TimestampSigner
 
 from mcp_broker.app import create_app
+from mcp_broker.storage import McpServerConfiguration
 
 pytestmark = pytest.mark.anyio
 
@@ -105,6 +106,36 @@ async def test_dashboard_renders_light_dark_system_theme_toggle(settings, fake_r
     assert 'html[data-theme="dark"]' in response.text
 
 
+async def test_dashboard_renders_discovered_mcp_server_boxes_from_storage(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "github": McpServerConfiguration(
+            name="github",
+            required_headers=("X-GITHUB-TOKEN",),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert 'class="server-card"' in response.text
+    assert "github" in response.text
+    assert "X-GITHUB-TOKEN" in response.text
+    assert 'name="delegated_auth_passthrough"' in response.text
+    assert "PKCE passthrough" in response.text
+
+
 async def test_admin_uses_dokploy_shell_and_status_badges(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
     cookie = _session_cookie(
@@ -168,3 +199,46 @@ async def test_discovery_partial_uses_result_cards_for_named_mcp(settings, fake_
     assert 'name="mcp_name" value="dokploy"' in response.text
     assert "X-DOKPLOY-TOKEN" in response.text
     assert "Saved" in response.text
+
+
+async def test_discovery_stores_admin_mcp_catalog_metadata_even_when_user_filter_hides_server(settings, fake_repository) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("x-litellm-api-key")
+        if request.url.path == "/v1/mcp/server" and auth == "Bearer admin-read-key":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "server_name": "github",
+                        "auth_type": "oauth2",
+                        "delegate_auth_to_upstream": True,
+                    },
+                    {
+                        "server_name": "dokploy",
+                        "env": {"TOKEN": "${X-DOKPLOY-TOKEN}"},
+                    },
+                ],
+            )
+        if request.url.path == "/v1/mcp/server" and auth == "Bearer litellm-user-key":
+            return httpx.Response(403, json={"error": "forbidden"})
+        if request.url.path == "/v1/mcp/tools" and auth == "Bearer litellm-user-key":
+            return httpx.Response(200, json={"tools": [{"name": "dokploy.deploy"}]})
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as litellm_client:
+        app = create_app(settings=settings, repository=fake_repository, http_client=litellm_client)
+        cookie = _session_cookie(
+            settings.session_secret,
+            {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://testserver",
+        ) as client:
+            client.cookies.set("session", cookie)
+            response = await client.post("/api/discover")
+
+    assert response.status_code == 200
+    assert fake_repository.mcp_servers["github"].delegated_auth_passthrough is True
+    assert fake_repository.mcp_servers["github"].auth_type == "oauth2"

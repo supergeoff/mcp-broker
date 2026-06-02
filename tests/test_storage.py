@@ -4,7 +4,7 @@ import pytest
 
 from mcp_broker.models import Base, UserLiteLLMKey
 from mcp_broker.security import FernetCipher
-from mcp_broker.storage import VaultRepository
+from mcp_broker.storage import McpServerConfiguration, VaultRepository
 
 pytestmark = pytest.mark.anyio
 
@@ -38,5 +38,52 @@ async def test_vault_repository_encrypts_and_upserts_user_values(encryption_key)
 
     assert stored_key is not None
     assert "litellm-user-key" not in stored_key.enc_value
+
+    await engine.dispose()
+
+
+async def test_vault_repository_upserts_discovered_mcp_server_configuration(encryption_key) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    repository = VaultRepository(session_factory, FernetCipher(encryption_key))
+
+    await repository.upsert_mcp_servers(
+        [
+            McpServerConfiguration(
+                name="github",
+                required_headers=("X-GITHUB-TOKEN",),
+                delegated_auth_passthrough=True,
+                auth_type="oauth2",
+            )
+        ]
+    )
+    await repository.upsert_mcp_servers(
+        [
+            McpServerConfiguration(
+                name="github",
+                required_headers=("X-GITHUB-TOKEN", "X-GITHUB-ORG"),
+                delegated_auth_passthrough=False,
+                auth_type="bearer_token",
+            )
+        ]
+    )
+
+    assert await repository.get_mcp_server("github") == McpServerConfiguration(
+        name="github",
+        required_headers=("X-GITHUB-ORG", "X-GITHUB-TOKEN"),
+        delegated_auth_passthrough=False,
+        auth_type="bearer_token",
+    )
+    assert await repository.list_mcp_servers() == [
+        McpServerConfiguration(
+            name="github",
+            required_headers=("X-GITHUB-ORG", "X-GITHUB-TOKEN"),
+            delegated_auth_passthrough=False,
+            auth_type="bearer_token",
+        )
+    ]
 
     await engine.dispose()

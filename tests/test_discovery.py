@@ -31,6 +31,32 @@ def test_normalize_servers_response_extracts_x_headers_from_litellm_shapes() -> 
     ]
 
 
+def test_normalize_servers_response_preserves_litellm_mcp_auth_metadata() -> None:
+    payload = [
+        {
+            "server_name": "github",
+            "alias": "gh",
+            "auth_type": "oauth2",
+            "delegate_auth_to_upstream": True,
+            "extra_headers": ["Authorization", "X-GITHUB-TOKEN"],
+            "static_headers": {"X-STATIC": "${X-STATIC-TOKEN}", "X-LITERAL": "literal"},
+            "env": {"TOKEN": "${X-GITHUB-ENV-TOKEN}"},
+        }
+    ]
+
+    servers = normalize_servers_response(payload)
+
+    assert len(servers) == 1
+    assert servers[0].name == "github"
+    assert servers[0].auth_type == "oauth2"
+    assert servers[0].delegated_auth_passthrough is True
+    assert servers[0].required_headers == (
+        "X-GITHUB-ENV-TOKEN",
+        "X-GITHUB-TOKEN",
+        "X-STATIC-TOKEN",
+    )
+
+
 async def test_discovery_uses_admin_catalog_and_user_tool_fallback(settings) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         auth = request.headers.get("x-litellm-api-key")

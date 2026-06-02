@@ -14,6 +14,8 @@ HEADER_REF_RE = re.compile(r"\$\{(X-[^}]+)\}")
 class DiscoveredServer:
     name: str
     required_headers: tuple[str, ...]
+    delegated_auth_passthrough: bool = False
+    auth_type: str | None = None
 
 
 def normalize_servers_response(payload: Any) -> list[DiscoveredServer]:
@@ -28,7 +30,9 @@ def normalize_servers_response(payload: Any) -> list[DiscoveredServer]:
         servers.append(
             DiscoveredServer(
                 name=name,
-                required_headers=tuple(sorted(_extract_header_refs(item))),
+                required_headers=tuple(sorted(_extract_required_headers(item))),
+                delegated_auth_passthrough=bool(item.get("delegate_auth_to_upstream")),
+                auth_type=str(item["auth_type"]) if item.get("auth_type") else None,
             )
         )
     return sorted(servers, key=lambda server: server.name)
@@ -39,10 +43,17 @@ class DiscoveryClient:
         self._settings = settings
         self._http_client = http_client
 
-    async def discover_for_user(self, user_litellm_key: str) -> list[DiscoveredServer]:
-        catalog = normalize_servers_response(
+    async def discover_catalog(self) -> list[DiscoveredServer]:
+        return normalize_servers_response(
             await self._get_json("/v1/mcp/server", self._settings.litellm_admin_key)
         )
+
+    async def discover_for_user(
+        self,
+        user_litellm_key: str,
+        catalog: list[DiscoveredServer] | None = None,
+    ) -> list[DiscoveredServer]:
+        catalog = catalog if catalog is not None else await self.discover_catalog()
         accessible_names = await self._accessible_server_names(user_litellm_key, catalog)
         return [server for server in catalog if server.name in accessible_names]
 
@@ -88,8 +99,19 @@ def _server_items(payload: Any) -> list[tuple[str | None, Any]]:
 
 
 def _server_name(item: dict[str, Any], fallback_name: str | None) -> str | None:
-    value = item.get("name") or item.get("server_name") or item.get("id") or fallback_name
+    value = item.get("server_name") or item.get("name") or item.get("alias") or item.get("id") or fallback_name
     return str(value) if value else None
+
+
+def _extract_required_headers(item: dict[str, Any]) -> set[str]:
+    headers = _extract_header_refs(item)
+    extra_headers = item.get("extra_headers")
+    if isinstance(extra_headers, list):
+        for header in extra_headers:
+            value = str(header).strip()
+            if value.upper().startswith("X-"):
+                headers.add(value)
+    return headers
 
 
 def _extract_header_refs(value: Any) -> set[str]:

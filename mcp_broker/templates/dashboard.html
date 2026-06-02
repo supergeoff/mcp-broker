@@ -74,32 +74,8 @@
         Refresh
       </button>
     </div>
-    <div id="discover-results" class="server-list"></div>
-  </section>
-
-  <section class="card" style="margin-top: 16px;">
-    <div class="card-header">
-      <div>
-        <h2 class="card-title">Add secret manually</h2>
-        <p class="card-description">Use this when LiteLLM does not advertise header metadata.</p>
-      </div>
+    <div id="discover-results" class="server-list">
+      {% include "discover.html" %}
     </div>
-    <form class="form-grid" method="post" action="/api/secret">
-      <div class="row">
-        <div class="field">
-          <label for="mcp_name">MCP name</label>
-          <input id="mcp_name" name="mcp_name" autocomplete="off" placeholder="dokploy" required>
-        </div>
-        <div class="field">
-          <label for="header_name">Header name</label>
-          <input id="header_name" name="header_name" autocomplete="off" placeholder="X-DOKPLOY_API_KEY" required>
-        </div>
-        <div class="field">
-          <label for="value">Secret value</label>
-          <input id="value" name="value" type="password" autocomplete="off" required>
-        </div>
-        <button class="button button-primary" type="submit">Save</button>
-      </div>
-    </form>
   </section>
 {% endblock %}
