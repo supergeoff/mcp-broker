@@ -81,6 +81,30 @@ async def test_dashboard_uses_dokploy_shell_and_system_theme(settings, fake_repo
     assert "admin@example.com" in response.text
 
 
+async def test_dashboard_renders_light_dark_system_theme_toggle(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert 'class="theme-toggle"' in response.text
+    assert 'data-theme-choice="light"' in response.text
+    assert 'data-theme-choice="dark"' in response.text
+    assert 'data-theme-choice="system"' in response.text
+    assert "mcp-broker-theme" in response.text
+    assert 'html[data-theme="light"]' in response.text
+    assert 'html[data-theme="dark"]' in response.text
+
+
 async def test_admin_uses_dokploy_shell_and_status_badges(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
     cookie = _session_cookie(

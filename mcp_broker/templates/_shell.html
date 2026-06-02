@@ -5,6 +5,56 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}mcp-broker{% endblock %}</title>
     {% block head_extra %}{% endblock %}
+    <script>
+      (function () {
+        var storageKey = "mcp-broker-theme";
+
+        function applyTheme(choice) {
+          var root = document.documentElement;
+          if (choice === "light" || choice === "dark") {
+            root.dataset.theme = choice;
+            root.style.colorScheme = choice;
+          } else {
+            root.removeAttribute("data-theme");
+            root.style.colorScheme = "light dark";
+          }
+        }
+
+        try {
+          applyTheme(localStorage.getItem(storageKey) || "system");
+        } catch (error) {
+          applyTheme("system");
+        }
+
+        window.setBrokerTheme = function (choice) {
+          try {
+            if (choice === "light" || choice === "dark") {
+              localStorage.setItem(storageKey, choice);
+            } else {
+              localStorage.removeItem(storageKey);
+            }
+          } catch (error) {
+            // Theme still changes for this page when storage is unavailable.
+          }
+          applyTheme(choice);
+          document.querySelectorAll("[data-theme-choice]").forEach(function (button) {
+            var active = button.dataset.themeChoice === choice || (choice === "system" && button.dataset.themeChoice === "system");
+            button.setAttribute("aria-pressed", String(active));
+            button.toggleAttribute("data-active", active);
+          });
+        };
+
+        document.addEventListener("DOMContentLoaded", function () {
+          var choice = "system";
+          try {
+            choice = localStorage.getItem(storageKey) || "system";
+          } catch (error) {
+            choice = "system";
+          }
+          window.setBrokerTheme(choice);
+        });
+      }());
+    </script>
     <style>
       :root {
         color-scheme: light dark;
@@ -26,6 +76,46 @@
         --warning-surface: #fef3c7;
         --radius: 10px;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      html[data-theme="light"] {
+        color-scheme: light;
+        --background: #f5f5f5;
+        --foreground: #0a0a0a;
+        --card: #ffffff;
+        --card-foreground: #0a0a0a;
+        --muted: #f1f1f1;
+        --muted-foreground: #737373;
+        --border: #d7d7d7;
+        --input: #e5e5e5;
+        --primary: #171717;
+        --primary-foreground: #fafafa;
+        --accent: #ededed;
+        --accent-foreground: #171717;
+        --success: #047857;
+        --success-surface: #d1fae5;
+        --warning: #b45309;
+        --warning-surface: #fef3c7;
+      }
+
+      html[data-theme="dark"] {
+        color-scheme: dark;
+        --background: #0d0d0d;
+        --foreground: #fafafa;
+        --card: #171717;
+        --card-foreground: #fafafa;
+        --muted: #212121;
+        --muted-foreground: #b3b3b3;
+        --border: #ffffff1a;
+        --input: #ffffff26;
+        --primary: #e5e5e5;
+        --primary-foreground: #171717;
+        --accent: #262626;
+        --accent-foreground: #fafafa;
+        --success: #34d399;
+        --success-surface: #064e3b66;
+        --warning: #fbbf24;
+        --warning-surface: #78350f66;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -133,6 +223,39 @@
         color: var(--muted-foreground);
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      .theme-panel {
+        display: grid;
+        gap: 8px;
+      }
+      .theme-label {
+        color: var(--muted-foreground);
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .theme-toggle {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 3px;
+        padding: 3px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--muted);
+      }
+      .theme-option {
+        min-height: 30px;
+        border: 0;
+        border-radius: calc(var(--radius) - 3px);
+        background: transparent;
+        color: var(--muted-foreground);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .theme-option:hover,
+      .theme-option[data-active] {
+        background: var(--card);
+        color: var(--foreground);
       }
       .content {
         width: 100%;
@@ -385,6 +508,14 @@
         </nav>
         <div class="sidebar-footer">
           <div class="user-email">{{ user.email or user.sub }}</div>
+          <div class="theme-panel">
+            <div class="theme-label">Theme</div>
+            <div class="theme-toggle" role="group" aria-label="Theme">
+              <button class="theme-option" type="button" data-theme-choice="light" aria-pressed="false" onclick="window.setBrokerTheme('light')">Light</button>
+              <button class="theme-option" type="button" data-theme-choice="dark" aria-pressed="false" onclick="window.setBrokerTheme('dark')">Dark</button>
+              <button class="theme-option" type="button" data-theme-choice="system" aria-pressed="true" data-active onclick="window.setBrokerTheme('system')">System</button>
+            </div>
+          </div>
           <a class="button button-ghost" href="/auth/logout">Logout</a>
         </div>
       </aside>
