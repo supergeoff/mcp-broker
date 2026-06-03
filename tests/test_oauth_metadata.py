@@ -19,7 +19,7 @@ async def test_root_protected_resource_metadata_advertises_pocket_id_scopes(sett
     assert response.json()["scopes_supported"] == ["openid", "email", "profile"]
 
 
-async def test_named_protected_resource_metadata_points_claude_to_pocket_id(settings, fake_repository) -> None:
+async def test_named_protected_resource_metadata_points_clients_to_pocket_id(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
 
     async with httpx.AsyncClient(
@@ -36,7 +36,6 @@ async def test_named_protected_resource_metadata_points_claude_to_pocket_id(sett
         "scopes_supported": ["openid", "email", "profile"],
         "resource_documentation": "https://broker.example.com/",
     }
-
 
 
 async def test_named_mcp_without_bearer_token_returns_oauth_challenge(settings, fake_repository) -> None:

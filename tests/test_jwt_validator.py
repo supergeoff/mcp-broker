@@ -20,7 +20,7 @@ def _token(private_key: rsa.RSAPrivateKey, **claims) -> str:
     now = datetime.now(UTC)
     payload = {
         "iss": "https://id.example.com",
-        "aud": "claude-connector-client-id",
+        "aud": "broker-mcp-client",
         "sub": "pocket-sub",
         "exp": now + timedelta(minutes=5),
         "iat": now,
@@ -33,7 +33,7 @@ def test_jwt_validator_accepts_pocket_id_access_token() -> None:
     private_key, jwks = _keypair_and_jwks()
     validator = JwtValidator(
         issuer="https://id.example.com",
-        audience="claude-connector-client-id",
+        audience="broker-mcp-client",
         jwks=jwks,
     )
 
@@ -43,11 +43,24 @@ def test_jwt_validator_accepts_pocket_id_access_token() -> None:
     assert claims["type"] == "oauth-access-token"
 
 
+def test_jwt_validator_accepts_any_configured_audience() -> None:
+    private_key, jwks = _keypair_and_jwks()
+    validator = JwtValidator(
+        issuer="https://id.example.com",
+        audience=("broker-mcp-client", "https://broker.example.com/dokploy"),
+        jwks=jwks,
+    )
+
+    claims = validator.verify(_token(private_key, aud="https://broker.example.com/dokploy"))
+
+    assert claims["aud"] == "https://broker.example.com/dokploy"
+
+
 def test_jwt_validator_rejects_wrong_audience() -> None:
     private_key, jwks = _keypair_and_jwks()
     validator = JwtValidator(
         issuer="https://id.example.com",
-        audience="claude-connector-client-id",
+        audience="broker-mcp-client",
         jwks=jwks,
     )
 

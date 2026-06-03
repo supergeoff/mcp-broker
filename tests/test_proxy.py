@@ -266,7 +266,7 @@ async def test_delegated_auth_oauth_endpoints_proxy_to_litellm_without_litellm_k
         base_url="http://testserver",
         follow_redirects=False,
     ) as client:
-        authorize_response = await client.get("/github/authorize?client_id=claude")
+        authorize_response = await client.get("/github/authorize?client_id=standard-mcp-client")
         token_response = await client.post(
             "/github/token",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
