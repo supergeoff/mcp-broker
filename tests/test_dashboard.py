@@ -1,5 +1,6 @@
 import json
 from base64 import b64encode
+from html.parser import HTMLParser
 
 import httpx
 import pytest
@@ -9,6 +10,24 @@ from mcp_broker.app import create_app
 from mcp_broker.storage import McpServerConfiguration
 
 pytestmark = pytest.mark.anyio
+
+
+class SecretInputParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.password_inputs: dict[str, dict[str, str | None]] = {}
+        self.toggle_controls: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if tag == "input" and attributes.get("type") == "password":
+            input_id = attributes.get("id")
+            if input_id is not None:
+                self.password_inputs[input_id] = attributes
+        if tag == "button" and "data-secret-toggle" in attributes:
+            controls = attributes.get("aria-controls")
+            if controls is not None:
+                self.toggle_controls.append(controls)
 
 
 def _session_cookie(secret: str, payload: dict[str, object]) -> str:
@@ -134,6 +153,40 @@ async def test_dashboard_renders_discovered_mcp_server_boxes_from_storage(settin
     assert "X-GITHUB-TOKEN" in response.text
     assert 'name="delegated_auth_passthrough"' in response.text
     assert "PKCE passthrough" in response.text
+
+
+async def test_dashboard_renders_reveal_controls_for_every_secret_input(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "github": McpServerConfiguration(
+            name="github",
+            required_headers=("X-GITHUB-TOKEN",),
+            delegated_auth_passthrough=False,
+            auth_type="bearer_token",
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    parser = SecretInputParser()
+    parser.feed(response.text)
+
+    assert response.status_code == 200
+    assert set(parser.password_inputs) == {"litellm_key", "secret-github-1", "manual-secret-github"}
+    assert set(parser.toggle_controls) == set(parser.password_inputs)
+    assert all("data-secret-input" in attributes for attributes in parser.password_inputs.values())
+    assert "toggleBrokerSecret" in response.text
+    assert "Show secret value" in response.text
+    assert "Hide secret value" in response.text
 
 
 async def test_admin_uses_dokploy_shell_and_status_badges(settings, fake_repository) -> None:
