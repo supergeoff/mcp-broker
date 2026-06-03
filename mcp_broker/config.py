@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     ui_oidc_client_id: str
     ui_oidc_client_secret: str
     expected_issuer: str | None = None
-    expected_audience: str
+    expected_audience: Annotated[list[str], NoDecode]
     litellm_base_url: str
     litellm_admin_key: str
     admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
@@ -32,6 +32,13 @@ class Settings(BaseSettings):
             return []
         if isinstance(value, str):
             return [email.strip().lower() for email in value.split(",") if email.strip()]
+        return value
+
+    @field_validator("expected_audience", mode="before")
+    @classmethod
+    def parse_expected_audience(cls, value: object) -> list[str] | object:
+        if isinstance(value, str):
+            return [audience.strip() for audience in value.split(",") if audience.strip()]
         return value
 
     @field_validator("public_url", "oidc_issuer", "litellm_base_url")

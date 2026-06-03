@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from typing import Any
 
 import jwt
@@ -27,7 +28,7 @@ class JwtValidator:
         self,
         *,
         issuer: str,
-        audience: str,
+        audience: str | Sequence[str],
         jwks_uri: str | None = None,
         jwks: dict[str, Any] | None = None,
     ) -> None:

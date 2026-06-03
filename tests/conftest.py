@@ -30,7 +30,7 @@ def settings(encryption_key: str) -> Settings:
         ui_oidc_client_id="ui-client-id",
         ui_oidc_client_secret="ui-client-secret",
         expected_issuer="https://id.example.com",
-        expected_audience="claude-connector-client-id",
+        expected_audience="broker-mcp-client",
         litellm_base_url="https://litellm.example.com",
         litellm_admin_key="admin-read-key",
         admin_emails="admin@example.com",
