@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}mcp-broker{% endblock %}</title>
+    <title>{% block title %}MCP Broker{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     {% block head_extra %}{% endblock %}
     <script>
       (function () {
@@ -52,6 +53,54 @@
             choice = "system";
           }
           window.setBrokerTheme(choice);
+        });
+      }());
+    </script>
+    <script>
+      (function () {
+        function setSecretVisibility(input, button, visible) {
+          input.type = visible ? "text" : "password";
+          button.setAttribute("aria-pressed", String(visible));
+          button.setAttribute("aria-label", visible ? "Hide secret value" : "Show secret value");
+
+          var showIcon = button.querySelector("[data-secret-icon-show]");
+          var hideIcon = button.querySelector("[data-secret-icon-hide]");
+          if (showIcon) {
+            showIcon.toggleAttribute("hidden", visible);
+          }
+          if (hideIcon) {
+            hideIcon.toggleAttribute("hidden", !visible);
+          }
+        }
+
+        window.toggleBrokerSecret = function (button) {
+          var input = null;
+          var controls = button.getAttribute("aria-controls");
+          if (controls) {
+            input = document.getElementById(controls);
+          }
+          if (!input) {
+            var container = button.closest(".secret-control");
+            input = container ? container.querySelector("input[data-secret-input]") : null;
+          }
+          if (!input) {
+            return;
+          }
+
+          setSecretVisibility(input, button, input.type !== "text");
+        };
+
+        document.addEventListener("click", function (event) {
+          if (!(event.target instanceof Element)) {
+            return;
+          }
+          var button = event.target.closest("[data-secret-toggle]");
+          if (!button) {
+            return;
+          }
+
+          event.preventDefault();
+          window.toggleBrokerSecret(button);
         });
       }());
     </script>
@@ -341,6 +390,45 @@
         margin: 0;
         accent-color: var(--primary);
       }
+      .secret-control {
+        position: relative;
+      }
+      .secret-control input {
+        padding-right: 46px;
+      }
+      .secret-toggle {
+        position: absolute;
+        top: 50%;
+        right: 4px;
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--muted-foreground);
+        cursor: pointer;
+        padding: 0;
+        transform: translateY(-50%);
+      }
+      .secret-toggle:hover {
+        background: var(--accent);
+        color: var(--accent-foreground);
+      }
+      .secret-toggle:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 1px;
+      }
+      .secret-toggle svg {
+        width: 17px;
+        height: 17px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+      }
       @media (prefers-color-scheme: dark) {
         input:focus { box-shadow: 0 0 0 2px rgba(229, 229, 229, .16); }
       }
@@ -519,7 +607,7 @@
           <a class="brand" href="/">
             <span class="brand-mark" aria-hidden="true">M</span>
             <span>
-              <span>mcp-broker</span>
+              <span>MCP Broker</span>
               <span class="brand-subtitle">OAuth MCP proxy</span>
             </span>
           </a>

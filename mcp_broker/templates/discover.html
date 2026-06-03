@@ -1,3 +1,4 @@
+{% from "_secret_input.html" import secret_input %}
 {% if servers %}
   {% for server in servers %}
     <div class="server-card">
@@ -43,7 +44,7 @@
               </div>
               <div class="field">
                 <label for="secret-{{ server.name }}-{{ loop.index }}">Secret value</label>
-                <input id="secret-{{ server.name }}-{{ loop.index }}" name="value" type="password" autocomplete="off" required>
+                {{ secret_input("secret-" ~ server.name ~ "-" ~ loop.index, "value") }}
               </div>
               <button class="button button-primary" type="submit">Save</button>
             </form>
@@ -60,7 +61,7 @@
         </div>
         <div class="field">
           <label for="manual-secret-{{ server.name }}">Secret value</label>
-          <input id="manual-secret-{{ server.name }}" name="value" type="password" autocomplete="off" required>
+          {{ secret_input("manual-secret-" ~ server.name, "value") }}
         </div>
         <button class="button button-secondary" type="submit">Save header</button>
       </form>

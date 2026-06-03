@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.sessions import SessionMiddleware
@@ -23,8 +23,14 @@ from mcp_broker.storage import McpServerConfiguration, Repository, VaultReposito
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-RESERVED_MCP_NAMES = {"admin", "api", "auth", "favicon.ico", "healthz", "mcp"}
+RESERVED_MCP_NAMES = {"admin", "api", "auth", "favicon.ico", "favicon.svg", "healthz", "mcp"}
 OIDC_SCOPES_SUPPORTED = ["openid", "email", "profile"]
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>MCP Broker</title>
+  <rect width="64" height="64" rx="14" fill="#171717"/>
+  <path d="M14 44V20l18 18 18-18v24" fill="none" stroke="#fafafa" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="32" y="54" fill="#fafafa" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="700" text-anchor="middle">MCP</text>
+</svg>"""
 
 
 def create_app(
@@ -85,6 +91,10 @@ def create_app(
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon() -> Response:
+        return Response(FAVICON_SVG, media_type="image/svg+xml")
 
     @app.get("/.well-known/oauth-protected-resource")
     async def protected_resource_metadata() -> dict[str, object]:

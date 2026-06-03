@@ -1,6 +1,7 @@
 {% extends "_shell.html" %}
+{% from "_secret_input.html" import secret_input %}
 
-{% block title %}mcp-broker{% endblock %}
+{% block title %}MCP Broker{% endblock %}
 
 {% block head_extra %}
   <script src="https://unpkg.com/htmx.org@2.0.7"></script>
@@ -30,7 +31,7 @@
       <form class="form-grid" method="post" action="/api/litellm-key">
         <div class="field">
           <label for="litellm_key">LiteLLM API key</label>
-          <input id="litellm_key" name="litellm_key" type="password" autocomplete="off" required>
+          {{ secret_input("litellm_key", "litellm_key") }}
         </div>
         <div class="actions">
           <button class="button button-primary" type="submit">Save key</button>
