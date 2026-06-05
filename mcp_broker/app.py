@@ -231,6 +231,25 @@ def create_app(
         await _repository(app).upsert_secret(user["sub"], mcp_name, header_name, value)
         return RedirectResponse("/", status_code=303)
 
+    @app.post("/api/secret/delete")
+    async def delete_secret(request: Request):
+        user = _require_session_user(request)
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
+        header_name = str(form.get("header_name", "")).strip()
+        if not header_name.startswith("X-"):
+            raise HTTPException(status_code=400, detail="A X-... header name is required")
+        await _repository(app).delete_secret(user["sub"], mcp_name, header_name)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/api/mcp/secrets/delete")
+    async def delete_mcp_secrets(request: Request):
+        user = _require_session_user(request)
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
+        await _repository(app).delete_mcp_secrets(user["sub"], mcp_name)
+        return RedirectResponse("/", status_code=303)
+
     @app.post("/api/mcp/delegated-auth")
     async def save_mcp_delegated_auth(request: Request):
         user = _require_session_user(request)

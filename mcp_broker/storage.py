@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import json
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mcp_broker.models import McpServer, User, UserLiteLLMKey, UserSecret
@@ -13,6 +13,8 @@ class Repository(Protocol):
     async def upsert_user(self, sub: str, email: str | None = None) -> None: ...
     async def get_litellm_key(self, user_sub: str) -> str | None: ...
     async def upsert_secret(self, user_sub: str, mcp_name: str, header_name: str, value: str) -> None: ...
+    async def delete_secret(self, user_sub: str, mcp_name: str, header_name: str) -> None: ...
+    async def delete_mcp_secrets(self, user_sub: str, mcp_name: str) -> None: ...
     async def get_secrets(self, user_sub: str, mcp_name: str) -> dict[str, str]: ...
     async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]: ...
     async def upsert_mcp_servers(self, servers: list["McpServerConfiguration"]) -> None: ...
@@ -109,6 +111,30 @@ class VaultRepository:
                 )
             ).all()
             return {row.header_name: self._cipher.decrypt(row.enc_value) for row in rows}
+
+    async def delete_secret(self, user_sub: str, mcp_name: str, header_name: str) -> None:
+        normalized_mcp_name = mcp_name.strip()
+        normalized_header = header_name.strip()
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(UserSecret).where(
+                    UserSecret.user_sub == user_sub,
+                    UserSecret.mcp_name == normalized_mcp_name,
+                    UserSecret.header_name == normalized_header,
+                )
+            )
+            await session.commit()
+
+    async def delete_mcp_secrets(self, user_sub: str, mcp_name: str) -> None:
+        normalized_mcp_name = mcp_name.strip()
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(UserSecret).where(
+                    UserSecret.user_sub == user_sub,
+                    UserSecret.mcp_name == normalized_mcp_name,
+                )
+            )
+            await session.commit()
 
     async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]:
         async with self._session_factory() as session:
