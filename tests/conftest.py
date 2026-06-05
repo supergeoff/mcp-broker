@@ -71,6 +71,19 @@ class FakeRepository:
         assert user_sub == "pocket-sub"
         self.secrets.setdefault(mcp_name, {})[header_name] = value
 
+    async def delete_secret(self, user_sub: str, mcp_name: str, header_name: str) -> None:
+        assert user_sub == "pocket-sub"
+        headers = self.secrets.get(mcp_name)
+        if headers is None:
+            return
+        headers.pop(header_name, None)
+        if not headers:
+            self.secrets.pop(mcp_name, None)
+
+    async def delete_mcp_secrets(self, user_sub: str, mcp_name: str) -> None:
+        assert user_sub == "pocket-sub"
+        self.secrets.pop(mcp_name, None)
+
     async def get_secrets(self, user_sub: str, mcp_name: str) -> dict[str, str]:
         assert user_sub == "pocket-sub"
         return self.secrets.get(mcp_name, {})

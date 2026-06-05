@@ -79,6 +79,99 @@ async def test_dashboard_saves_secret_header_for_named_mcp(settings, fake_reposi
     assert fake_repository.secrets["dokploy"]["X-DOKPLOY_API_KEY"] == "dokploy-key"
 
 
+async def test_dashboard_deletes_secret_header_for_named_mcp(settings, fake_repository) -> None:
+    fake_repository.secrets = {
+        "dokploy": {
+            "X-DOKPLOY-TOKEN": "dokploy-token",
+            "X-DOKPLOY-ORG": "dokploy-org",
+        },
+        "github": {"X-GITHUB-TOKEN": "github-token"},
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/secret/delete",
+            data={
+                "mcp_name": "dokploy",
+                "header_name": "X-DOKPLOY-TOKEN",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.secrets == {
+        "dokploy": {"X-DOKPLOY-ORG": "dokploy-org"},
+        "github": {"X-GITHUB-TOKEN": "github-token"},
+    }
+
+
+async def test_dashboard_deletes_all_secret_headers_for_named_mcp(settings, fake_repository) -> None:
+    fake_repository.secrets = {
+        "dokploy": {
+            "X-DOKPLOY-TOKEN": "dokploy-token",
+            "X-DOKPLOY-ORG": "dokploy-org",
+        },
+        "github": {"X-GITHUB-TOKEN": "github-token"},
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/mcp/secrets/delete",
+            data={"mcp_name": "dokploy"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.secrets == {"github": {"X-GITHUB-TOKEN": "github-token"}}
+
+
+async def test_dashboard_renders_delete_controls_for_saved_headers(settings, fake_repository) -> None:
+    fake_repository.secrets = {
+        "dokploy": {
+            "X-DOKPLOY-TOKEN": "dokploy-token",
+            "X-DOKPLOY-ORG": "dokploy-org",
+        }
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert 'action="/api/secret/delete"' in response.text
+    assert 'action="/api/mcp/secrets/delete"' in response.text
+    assert 'name="mcp_name" value="dokploy"' in response.text
+    assert 'name="header_name" value="X-DOKPLOY-TOKEN"' in response.text
+    assert 'name="header_name" value="X-DOKPLOY-ORG"' in response.text
+    assert "Delete all" in response.text
+
+
 async def test_dashboard_uses_dokploy_shell_and_system_theme(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
     cookie = _session_cookie(

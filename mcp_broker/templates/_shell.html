@@ -123,6 +123,8 @@
         --success-surface: #d1fae5;
         --warning: #b45309;
         --warning-surface: #fef3c7;
+        --destructive: #b91c1c;
+        --destructive-surface: #fee2e2;
         --radius: 10px;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
@@ -145,6 +147,8 @@
         --success-surface: #d1fae5;
         --warning: #b45309;
         --warning-surface: #fef3c7;
+        --destructive: #b91c1c;
+        --destructive-surface: #fee2e2;
       }
 
       html[data-theme="dark"] {
@@ -165,6 +169,8 @@
         --success-surface: #064e3b66;
         --warning: #fbbf24;
         --warning-surface: #78350f66;
+        --destructive: #f87171;
+        --destructive-surface: #7f1d1d66;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -185,6 +191,8 @@
           --success-surface: #064e3b66;
           --warning: #fbbf24;
           --warning-surface: #78350f66;
+          --destructive: #f87171;
+          --destructive-surface: #7f1d1d66;
         }
       }
 
@@ -465,9 +473,22 @@
         background: var(--accent);
         color: var(--accent-foreground);
       }
+      .button-danger {
+        background: var(--destructive-surface);
+        color: var(--destructive);
+        border-color: transparent;
+      }
+      .button-danger:hover {
+        border-color: var(--destructive);
+      }
       .button-ghost {
         color: var(--muted-foreground);
         border-color: transparent;
+      }
+      .button-small {
+        min-height: 32px;
+        padding: 5px 9px;
+        font-size: 12px;
       }
       .status-badge,
       .badge {
@@ -513,6 +534,22 @@
         margin: 0;
         font-size: 14px;
         font-weight: 650;
+      }
+      .saved-group-header,
+      .saved-secret-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .saved-secret-list {
+        display: grid;
+        gap: 8px;
+      }
+      .saved-secret-row {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 7px 8px;
       }
       .server-list {
         display: grid;

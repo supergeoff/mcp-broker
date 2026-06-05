@@ -42,6 +42,31 @@ async def test_vault_repository_encrypts_and_upserts_user_values(encryption_key)
     await engine.dispose()
 
 
+async def test_vault_repository_deletes_secret_headers(encryption_key) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    repository = VaultRepository(session_factory, FernetCipher(encryption_key))
+
+    await repository.upsert_secret("pocket-sub", "dokploy", "X-DOKPLOY-TOKEN", "dokploy-token")
+    await repository.upsert_secret("pocket-sub", "dokploy", "X-DOKPLOY-ORG", "dokploy-org")
+    await repository.upsert_secret("pocket-sub", "github", "X-GITHUB-TOKEN", "github-token")
+
+    await repository.delete_secret("pocket-sub", "dokploy", "X-DOKPLOY-TOKEN")
+
+    assert await repository.get_secrets("pocket-sub", "dokploy") == {"X-DOKPLOY-ORG": "dokploy-org"}
+    assert await repository.get_secrets("pocket-sub", "github") == {"X-GITHUB-TOKEN": "github-token"}
+
+    await repository.delete_mcp_secrets("pocket-sub", "dokploy")
+
+    assert await repository.get_secrets("pocket-sub", "dokploy") == {}
+    assert await repository.get_secrets("pocket-sub", "github") == {"X-GITHUB-TOKEN": "github-token"}
+
+    await engine.dispose()
+
+
 async def test_vault_repository_upserts_discovered_mcp_server_configuration(encryption_key) -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
