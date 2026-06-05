@@ -1,6 +1,6 @@
 # mcp-broker
 
-Self-hosted MCP proxy that lets standard AI clients such as Claude Code, Open WebUI, and other Streamable HTTP MCP clients connect to LiteLLM MCP servers through Pocket ID OAuth, while injecting per-user LiteLLM keys and per-user, per-MCP `X-...` secrets toward LiteLLM.
+Self-hosted MCP proxy that lets standard AI clients such as Claude Code, Open WebUI, and other Streamable HTTP MCP clients connect to LiteLLM MCP servers through Pocket ID OAuth, while injecting per-user LiteLLM keys and per-user, per-MCP secret headers toward LiteLLM.
 
 This repository intentionally contains no runtime secrets. Configure deployments only with environment variables.
 
@@ -8,7 +8,7 @@ This repository intentionally contains no runtime secrets. Configure deployments
 
 - OAuth protected-resource metadata for standard MCP client discovery.
 - Pocket ID JWT validation through JWKS.
-- Per-user encrypted LiteLLM key and per-MCP `X-...` header vault.
+- Per-user encrypted LiteLLM key and per-MCP secret header vault.
 - Dynamic LiteLLM MCP discovery using admin catalog access plus user-key filtering.
 - Streaming reverse proxy from `/{server}` to the LiteLLM `/{server}/mcp` endpoint with `Authorization` stripped and only user headers for that server injected.
 - Delegated upstream OAuth passthrough for LiteLLM MCP servers that manage their own OAuth.

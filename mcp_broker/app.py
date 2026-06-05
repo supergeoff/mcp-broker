@@ -19,6 +19,7 @@ from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mc
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
 from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
+from mcp_broker.secret_headers import is_valid_secret_header_name, normalize_secret_header_name
 from mcp_broker.storage import McpServerConfiguration, Repository, VaultRepository
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -224,10 +225,10 @@ def create_app(
         user = _require_session_user(request)
         form = await request.form()
         mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
-        header_name = str(form.get("header_name", "")).strip()
+        header_name = normalize_secret_header_name(str(form.get("header_name", "")))
         value = str(form.get("value", "")).strip()
-        if not header_name.startswith("X-") or not value:
-            raise HTTPException(status_code=400, detail="A X-... header name and value are required")
+        if not is_valid_secret_header_name(header_name) or not value:
+            raise HTTPException(status_code=400, detail="A valid header name and value are required")
         await _repository(app).upsert_secret(user["sub"], mcp_name, header_name, value)
         return RedirectResponse("/", status_code=303)
 

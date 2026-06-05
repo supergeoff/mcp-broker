@@ -57,6 +57,20 @@ def test_normalize_servers_response_preserves_litellm_mcp_auth_metadata() -> Non
     )
 
 
+def test_normalize_servers_response_extracts_valid_custom_extra_headers() -> None:
+    payload = [
+        {
+            "server_name": "custom",
+            "extra_headers": ["Authorization", "xc-mcp-token"],
+        }
+    ]
+
+    servers = normalize_servers_response(payload)
+
+    assert len(servers) == 1
+    assert servers[0].required_headers == ("xc-mcp-token",)
+
+
 async def test_discovery_uses_admin_catalog_and_user_tool_fallback(settings) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         auth = request.headers.get("x-litellm-api-key")

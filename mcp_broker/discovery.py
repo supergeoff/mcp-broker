@@ -6,6 +6,7 @@ import httpx
 
 from mcp_broker.config import Settings
 from mcp_broker.security import litellm_auth_value
+from mcp_broker.secret_headers import is_valid_secret_header_name, normalize_secret_header_name
 
 HEADER_REF_RE = re.compile(r"\$\{(X-[^}]+)\}")
 
@@ -108,8 +109,8 @@ def _extract_required_headers(item: dict[str, Any]) -> set[str]:
     extra_headers = item.get("extra_headers")
     if isinstance(extra_headers, list):
         for header in extra_headers:
-            value = str(header).strip()
-            if value.upper().startswith("X-"):
+            value = normalize_secret_header_name(str(header))
+            if is_valid_secret_header_name(value):
                 headers.add(value)
     return headers
 
