@@ -289,6 +289,49 @@ async def test_direct_passthrough_mcp_preserves_authorization_without_pocket_id(
     assert "x-litellm-api-key" not in captured["headers"]
 
 
+async def test_direct_passthrough_mcp_rewrites_oauth_challenge_metadata(settings) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": "invalid_token"},
+            headers={
+                "www-authenticate": (
+                    'Bearer error="invalid_token", '
+                    'resource_metadata="https://googlemcp.example.com/.well-known/oauth-protected-resource/mcp"'
+                )
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post("/googlemcp", content=b"{}")
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == (
+        'Bearer error="invalid_token", '
+        'resource_metadata="https://broker.example.com/.well-known/oauth-protected-resource/googlemcp"'
+    )
+
+
 async def test_delegated_auth_mcp_proxies_without_pocket_id_and_preserves_authorization(settings) -> None:
     captured: dict[str, object] = {}
 

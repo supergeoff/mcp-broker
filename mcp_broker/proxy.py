@@ -133,6 +133,7 @@ async def proxy_direct_passthrough_mcp_request(
     request: Request,
     server: McpServerConfiguration,
     subpath: str,
+    settings: Settings,
     http_client: httpx.AsyncClient,
 ) -> StreamingResponse:
     if not server.direct_url:
@@ -147,7 +148,7 @@ async def proxy_direct_passthrough_mcp_request(
     return StreamingResponse(
         _response_body(upstream_response),
         status_code=upstream_response.status_code,
-        headers=_response_headers(upstream_response.headers),
+        headers=_direct_response_headers(upstream_response.headers, settings, server),
         background=BackgroundTask(upstream_response.aclose),
     )
 
@@ -302,6 +303,17 @@ def _response_headers(incoming: Mapping[str, str]) -> dict[str, str]:
         name: value
         for name, value in incoming.items()
         if name.lower() not in RESPONSE_BLOCKLIST
+    }
+
+
+def _direct_response_headers(
+    incoming: Mapping[str, str],
+    settings: Settings,
+    server: McpServerConfiguration,
+) -> dict[str, str]:
+    return {
+        name: _rewrite_direct_metadata_string(value, settings, server)
+        for name, value in _response_headers(incoming).items()
     }
 
 
