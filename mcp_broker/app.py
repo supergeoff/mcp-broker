@@ -173,10 +173,15 @@ def create_app(
             return RedirectResponse("/auth/login")
         repository = _repository(app)
         litellm_key_saved = await repository.get_litellm_key(user["sub"]) is not None
-        secrets = await repository.list_secret_headers(user["sub"])
+        mcp_servers = await repository.list_mcp_servers()
+        catalog_names = {server.name for server in mcp_servers}
+        secrets = {
+            mcp_name: header_names
+            for mcp_name, header_names in (await repository.list_secret_headers(user["sub"])).items()
+            if mcp_name in catalog_names
+        }
         email = str(user.get("email") or "").lower()
         is_admin = email in settings.admin_emails
-        mcp_servers = await repository.list_mcp_servers()
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",

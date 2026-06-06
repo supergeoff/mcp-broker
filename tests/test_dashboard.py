@@ -300,6 +300,59 @@ async def test_dashboard_renders_discovered_mcp_server_boxes_from_storage(settin
     assert "PKCE passthrough" in response.text
 
 
+async def test_dashboard_renders_direct_mcp_in_catalog(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "googlemcp": McpServerConfiguration(
+            name="googlemcp",
+            required_headers=(),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp",
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert "googlemcp" in response.text
+    assert "Direct" in response.text
+    assert "Upstream OAuth passthrough" in response.text
+
+
+async def test_dashboard_hides_saved_headers_for_servers_not_in_catalog(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {}
+    fake_repository.secrets = {
+        "googlemcp": {"X-GOOGLE-WORKSPACE": "workspace-token"},
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert "googlemcp" not in response.text
+    assert "X-GOOGLE-WORKSPACE" not in response.text
+
+
 async def test_dashboard_renders_reveal_controls_for_every_secret_input(settings, fake_repository) -> None:
     fake_repository.mcp_servers = {
         "github": McpServerConfiguration(
