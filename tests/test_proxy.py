@@ -277,7 +277,11 @@ async def test_direct_passthrough_mcp_preserves_authorization_without_pocket_id(
     ) as client:
         response = await client.post(
             "/googlemcp/events?cursor=abc",
-            headers={"Authorization": "Bearer upstream-token"},
+            headers={
+                "Authorization": "Bearer upstream-token",
+                "Origin": "https://broker.example.com",
+                "Referer": "https://broker.example.com/googlemcp",
+            },
             content=b"{}",
         )
 
@@ -286,6 +290,8 @@ async def test_direct_passthrough_mcp_preserves_authorization_without_pocket_id(
     assert captured["url"] == "https://googlemcp.example.com/mcp/events?cursor=abc"
     assert captured["body"] == b"{}"
     assert captured["headers"]["authorization"] == "Bearer upstream-token"
+    assert captured["headers"]["origin"] == "https://googlemcp.example.com"
+    assert "referer" not in captured["headers"]
     assert "x-litellm-api-key" not in captured["headers"]
 
 
@@ -508,10 +514,20 @@ async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(setti
         base_url="http://testserver",
         follow_redirects=False,
     ) as client:
-        authorize_response = await client.get("/googlemcp/authorize?client_id=standard-mcp-client")
+        authorize_response = await client.get(
+            "/googlemcp/authorize?client_id=standard-mcp-client",
+            headers={
+                "Origin": "https://broker.example.com",
+                "Referer": "https://broker.example.com/googlemcp",
+            },
+        )
         token_response = await client.post(
             "/googlemcp/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": "https://broker.example.com",
+                "Referer": "https://broker.example.com/googlemcp",
+            },
             content=b"grant_type=authorization_code&code=abc",
         )
 
@@ -524,5 +540,9 @@ async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(setti
     assert captured[1][0] == "POST"
     assert captured[1][1] == "/token"
     assert captured[1][3] == b"grant_type=authorization_code&code=abc"
+    assert captured[0][4]["origin"] == "https://googlemcp.example.com"
+    assert captured[1][4]["origin"] == "https://googlemcp.example.com"
+    assert "referer" not in captured[0][4]
+    assert "referer" not in captured[1][4]
     assert "x-litellm-api-key" not in captured[0][4]
     assert "x-litellm-api-key" not in captured[1][4]

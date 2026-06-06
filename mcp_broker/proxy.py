@@ -141,7 +141,7 @@ async def proxy_direct_passthrough_mcp_request(
     upstream_request = http_client.build_request(
         request.method,
         _direct_mcp_url(server.direct_url, subpath, request.url.query),
-        headers=_delegated_upstream_headers(request.headers),
+        headers=_direct_upstream_headers(request.headers, server),
         content=await request.body(),
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
@@ -165,7 +165,7 @@ async def proxy_direct_oauth_endpoint_request(
     upstream_request = http_client.build_request(
         request.method,
         _direct_oauth_url(server.direct_url, endpoint, request.url.query),
-        headers=_delegated_upstream_headers(request.headers),
+        headers=_direct_upstream_headers(request.headers, server),
         content=await request.body(),
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
@@ -188,7 +188,7 @@ async def proxy_direct_oauth_metadata_request(
     if not server.direct_url:
         raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
     upstream_url = _direct_metadata_url(server.direct_url, metadata_kind, request.url.query)
-    upstream_response = await http_client.get(upstream_url, headers=_delegated_upstream_headers(request.headers))
+    upstream_response = await http_client.get(upstream_url, headers=_direct_upstream_headers(request.headers, server))
     try:
         payload = upstream_response.json()
     except ValueError:
@@ -268,6 +268,25 @@ def _delegated_upstream_headers(incoming: Mapping[str, str]) -> dict[str, str]:
         for name, value in incoming.items()
         if name.lower() not in DELEGATED_REQUEST_BLOCKLIST
     }
+
+
+def _direct_upstream_headers(
+    incoming: Mapping[str, str],
+    server: McpServerConfiguration,
+) -> dict[str, str]:
+    headers = _delegated_upstream_headers(incoming)
+    if not server.direct_url:
+        return headers
+
+    upstream_origin = _url_origin(httpx.URL(server.direct_url))
+    # Direct FastMCP OAuth upstreams validate Origin against their own origin.
+    headers = {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in {"origin", "referer"}
+    }
+    headers["origin"] = upstream_origin
+    return headers
 
 
 def _direct_mcp_url(direct_url: str, subpath: str, query: str) -> httpx.URL:

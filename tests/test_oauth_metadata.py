@@ -45,6 +45,7 @@ async def test_direct_passthrough_protected_resource_metadata_is_proxied_and_rew
 
     async def handler(request: httpx.Request) -> httpx.Response:
         captured["path"] = request.url.path
+        captured["headers"] = dict(request.headers)
         return httpx.Response(
             200,
             json={
@@ -76,10 +77,18 @@ async def test_direct_passthrough_protected_resource_metadata_is_proxied_and_rew
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
-        response = await client.get("/.well-known/oauth-protected-resource/googlemcp")
+        response = await client.get(
+            "/.well-known/oauth-protected-resource/googlemcp",
+            headers={
+                "Origin": "https://broker.example.com",
+                "Referer": "https://broker.example.com/googlemcp",
+            },
+        )
 
     assert response.status_code == 200
     assert captured["path"] == "/.well-known/oauth-protected-resource/mcp"
+    assert captured["headers"]["origin"] == "https://googlemcp.example.com"
+    assert "referer" not in captured["headers"]
     assert response.json() == {
         "resource": "https://broker.example.com/googlemcp",
         "authorization_servers": [
