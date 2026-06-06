@@ -21,7 +21,7 @@ from mcp_broker.models import Base
 from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
 from mcp_broker.proxy import proxy_direct_broker_mcp_request, proxy_direct_oauth_endpoint_request
-from mcp_broker.proxy import proxy_direct_passthrough_mcp_request
+from mcp_broker.proxy import proxy_direct_oauth_metadata_request, proxy_direct_passthrough_mcp_request
 from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
 from mcp_broker.secret_headers import is_valid_secret_header_name, normalize_secret_header_name
@@ -116,7 +116,16 @@ def create_app(
     @app.get("/.well-known/oauth-protected-resource/{mcp_name}")
     async def named_protected_resource_metadata(request: Request, mcp_name: str):
         normalized_mcp_name = _normalize_mcp_name(mcp_name)
-        if await _is_delegated_mcp(app, normalized_mcp_name):
+        server = await _repository(app).get_mcp_server(normalized_mcp_name)
+        if server and server.delegated_auth_passthrough:
+            if server.source == MCP_SOURCE_DIRECT:
+                return await proxy_direct_oauth_metadata_request(
+                    request=request,
+                    server=server,
+                    metadata_kind="oauth-protected-resource",
+                    settings=settings,
+                    http_client=_http_client(app),
+                )
             return await proxy_delegated_oauth_metadata_request(
                 request=request,
                 mcp_name=normalized_mcp_name,
@@ -129,8 +138,17 @@ def create_app(
     @app.get("/.well-known/oauth-authorization-server/{mcp_name}")
     async def named_authorization_server_metadata(request: Request, mcp_name: str):
         normalized_mcp_name = _normalize_mcp_name(mcp_name)
-        if not await _is_delegated_mcp(app, normalized_mcp_name):
+        server = await _repository(app).get_mcp_server(normalized_mcp_name)
+        if not server or not server.delegated_auth_passthrough:
             raise HTTPException(status_code=404, detail="MCP server not found")
+        if server.source == MCP_SOURCE_DIRECT:
+            return await proxy_direct_oauth_metadata_request(
+                request=request,
+                server=server,
+                metadata_kind="oauth-authorization-server",
+                settings=settings,
+                http_client=_http_client(app),
+            )
         return await proxy_delegated_oauth_metadata_request(
             request=request,
             mcp_name=normalized_mcp_name,
@@ -441,11 +459,6 @@ def _mcp_server_configurations(servers: list[Any]) -> list[McpServerConfiguratio
         )
         for server in servers
     ]
-
-
-async def _is_delegated_mcp(app: FastAPI, mcp_name: str) -> bool:
-    server = await _repository(app).get_mcp_server(mcp_name)
-    return bool(server and server.delegated_auth_passthrough)
 
 
 def _is_admin_user(user: Mapping[str, str], settings: Settings) -> bool:

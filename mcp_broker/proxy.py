@@ -176,6 +176,29 @@ async def proxy_direct_oauth_endpoint_request(
     )
 
 
+async def proxy_direct_oauth_metadata_request(
+    *,
+    request: Request,
+    server: McpServerConfiguration,
+    metadata_kind: str,
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+) -> JSONResponse:
+    if not server.direct_url:
+        raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
+    upstream_url = _direct_metadata_url(server.direct_url, metadata_kind, request.url.query)
+    upstream_response = await http_client.get(upstream_url, headers=_delegated_upstream_headers(request.headers))
+    try:
+        payload = upstream_response.json()
+    except ValueError:
+        payload = {}
+    return JSONResponse(
+        _rewrite_direct_metadata(payload, settings, server),
+        status_code=upstream_response.status_code,
+        headers=_response_headers(upstream_response.headers),
+    )
+
+
 async def proxy_delegated_oauth_metadata_request(
     *,
     request: Request,
@@ -256,6 +279,15 @@ def _direct_oauth_url(direct_url: str, endpoint: str, query: str) -> httpx.URL:
     return url.copy_with(path=path, query=query.encode("utf-8"))
 
 
+def _direct_metadata_url(direct_url: str, metadata_kind: str, query: str) -> httpx.URL:
+    url = httpx.URL(direct_url)
+    resource_path = url.path.strip("/")
+    path = f"/.well-known/{metadata_kind}"
+    if resource_path:
+        path = f"{path}/{resource_path}"
+    return url.copy_with(path=path, query=query.encode("utf-8"))
+
+
 def _response_headers(incoming: Mapping[str, str]) -> dict[str, str]:
     return {
         name: value
@@ -284,3 +316,31 @@ def _rewrite_litellm_metadata(value: object, settings: Settings, mcp_name: str) 
     if isinstance(value, dict):
         return {key: _rewrite_litellm_metadata(item, settings, mcp_name) for key, item in value.items()}
     return value
+
+
+def _rewrite_direct_metadata(value: object, settings: Settings, server: McpServerConfiguration) -> object:
+    if isinstance(value, str):
+        return _rewrite_direct_metadata_string(value, settings, server)
+    if isinstance(value, list):
+        return [_rewrite_direct_metadata(item, settings, server) for item in value]
+    if isinstance(value, dict):
+        return {key: _rewrite_direct_metadata(item, settings, server) for key, item in value.items()}
+    return value
+
+
+def _rewrite_direct_metadata_string(value: str, settings: Settings, server: McpServerConfiguration) -> str:
+    if not server.direct_url:
+        return value
+    public_mcp_url = f"{settings.public_url}/{server.name}"
+    direct_url = str(httpx.URL(server.direct_url)).rstrip("/")
+    rewritten = value.replace(direct_url, public_mcp_url)
+
+    for metadata_kind in ("oauth-protected-resource", "oauth-authorization-server"):
+        upstream = str(_direct_metadata_url(server.direct_url, metadata_kind, "")).rstrip("?")
+        public = f"{settings.public_url}/.well-known/{metadata_kind}/{server.name}"
+        rewritten = rewritten.replace(upstream, public)
+
+    for endpoint in ("authorize", "token", "register"):
+        upstream = str(_direct_oauth_url(server.direct_url, endpoint, "")).rstrip("?")
+        rewritten = rewritten.replace(upstream, f"{public_mcp_url}/{endpoint}")
+    return rewritten
