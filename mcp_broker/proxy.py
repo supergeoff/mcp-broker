@@ -289,10 +289,11 @@ def _direct_oauth_url(direct_url: str, endpoint: str, query: str) -> httpx.URL:
 
 def _direct_metadata_url(direct_url: str, metadata_kind: str, query: str) -> httpx.URL:
     url = httpx.URL(direct_url)
-    resource_path = url.path.strip("/")
     path = f"/.well-known/{metadata_kind}"
-    if resource_path:
-        path = f"{path}/{resource_path}"
+    if metadata_kind == "oauth-protected-resource":
+        resource_path = url.path.strip("/")
+        if resource_path:
+            path = f"{path}/{resource_path}"
     return url.copy_with(path=path, query=query.encode("utf-8"))
 
 
@@ -340,15 +341,27 @@ def _rewrite_direct_metadata_string(value: str, settings: Settings, server: McpS
     if not server.direct_url:
         return value
     public_mcp_url = f"{settings.public_url}/{server.name}"
-    direct_url = str(httpx.URL(server.direct_url)).rstrip("/")
+    upstream = httpx.URL(server.direct_url)
+    direct_url = str(upstream).rstrip("/")
+    upstream_origin = _url_origin(upstream)
     rewritten = value.replace(direct_url, public_mcp_url)
 
     for metadata_kind in ("oauth-protected-resource", "oauth-authorization-server"):
-        upstream = str(_direct_metadata_url(server.direct_url, metadata_kind, "")).rstrip("?")
+        upstream_metadata = str(_direct_metadata_url(server.direct_url, metadata_kind, "")).rstrip("?")
         public = f"{settings.public_url}/.well-known/{metadata_kind}/{server.name}"
-        rewritten = rewritten.replace(upstream, public)
+        rewritten = rewritten.replace(upstream_metadata, public)
 
     for endpoint in ("authorize", "token", "register"):
-        upstream = str(_direct_oauth_url(server.direct_url, endpoint, "")).rstrip("?")
-        rewritten = rewritten.replace(upstream, f"{public_mcp_url}/{endpoint}")
+        upstream_endpoint = str(_direct_oauth_url(server.direct_url, endpoint, "")).rstrip("?")
+        rewritten = rewritten.replace(upstream_endpoint, f"{public_mcp_url}/{endpoint}")
+
+    if rewritten in {upstream_origin, f"{upstream_origin}/"}:
+        return public_mcp_url
+    rewritten = rewritten.replace(f"{upstream_origin}/", f"{public_mcp_url}/")
+    rewritten = rewritten.replace(upstream_origin, public_mcp_url)
     return rewritten
+
+
+def _url_origin(url: httpx.URL) -> str:
+    port = f":{url.port}" if url.port is not None else ""
+    return f"{url.scheme}://{url.host}{port}"

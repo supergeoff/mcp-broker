@@ -831,6 +831,38 @@ async def test_admin_checks_litellm_upstream_health(settings, fake_repository) -
     assert "401 upstream auth failed" in response.text
 
 
+async def test_admin_shows_empty_litellm_health_response_as_healthy(settings, fake_repository) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "healthy_endpoints": [],
+                "unhealthy_endpoints": [],
+                "healthy_count": 0,
+                "unhealthy_count": 0,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as litellm_client:
+        app = create_app(settings=settings, repository=fake_repository, http_client=litellm_client)
+        cookie = _session_cookie(
+            settings.session_secret,
+            {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://testserver",
+        ) as client:
+            client.cookies.set("session", cookie)
+            response = await client.post("/api/litellm/upstream-health")
+
+    assert response.status_code == 200
+    assert ">healthy<" in response.text
+    assert "LiteLLM returned no per-model health details" in response.text
+    assert "LiteLLM health returned no model endpoint data" not in response.text
+
+
 async def test_non_admin_cannot_check_litellm_upstream_health(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
     cookie = _session_cookie(

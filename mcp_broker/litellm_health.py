@@ -13,6 +13,7 @@ class LiteLLMHealthEndpoint:
     status: str
     api_base: str | None = None
     error: str | None = None
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,10 @@ def normalize_litellm_health_response(payload: Any) -> LiteLLMHealthReport:
     if endpoints:
         return LiteLLMHealthReport(tuple(endpoints))
 
+    count_only_report = _count_only_report(payload)
+    if count_only_report is not None:
+        return count_only_report
+
     status = str(payload.get("status", "")).strip().lower()
     if status in {"connected", "healthy", "ok"}:
         return LiteLLMHealthReport(
@@ -65,6 +70,43 @@ def normalize_litellm_health_response(payload: Any) -> LiteLLMHealthReport:
 def _items(payload: dict[str, Any], key: str) -> list[Any]:
     value = payload.get(key)
     return value if isinstance(value, list) else []
+
+
+def _count_only_report(payload: dict[str, Any]) -> LiteLLMHealthReport | None:
+    has_endpoint_fields = "healthy_endpoints" in payload or "unhealthy_endpoints" in payload
+    healthy_count = _count(payload, "healthy_count")
+    unhealthy_count = _count(payload, "unhealthy_count")
+    if not has_endpoint_fields and healthy_count is None and unhealthy_count is None:
+        return None
+
+    if unhealthy_count and unhealthy_count > 0:
+        return _single_failure(
+            f"LiteLLM reported {_plural(unhealthy_count, 'unhealthy endpoint')} without endpoint details"
+        )
+
+    if healthy_count and healthy_count > 0:
+        detail = f"LiteLLM reported {_plural(healthy_count, 'healthy endpoint')} without per-model details."
+    else:
+        detail = "LiteLLM returned no per-model health details and no unhealthy endpoints."
+    return LiteLLMHealthReport(
+        (LiteLLMHealthEndpoint(model="LiteLLM health", status="healthy", detail=detail),)
+    )
+
+
+def _count(payload: dict[str, Any], key: str) -> int | None:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return None
+
+
+def _plural(count: int, label: str) -> str:
+    suffix = "" if count == 1 else "s"
+    return f"{count} {label}{suffix}"
 
 
 def _endpoint_from_item(item: Any, status: str) -> LiteLLMHealthEndpoint:

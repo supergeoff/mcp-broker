@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from mcp_broker.litellm_health import LiteLLMHealthClient
+from mcp_broker.litellm_health import LiteLLMHealthClient, normalize_litellm_health_response
 
 pytestmark = pytest.mark.anyio
 
@@ -57,3 +57,33 @@ async def test_litellm_health_client_reports_http_auth_failures(settings) -> Non
     ]
     assert "401" in (report.endpoints[0].error or "")
     assert "invalid token" in (report.endpoints[0].error or "")
+
+
+async def test_litellm_health_treats_empty_success_response_as_healthy() -> None:
+    report = normalize_litellm_health_response(
+        {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [],
+            "healthy_count": 0,
+            "unhealthy_count": 0,
+        }
+    )
+
+    assert [(endpoint.model, endpoint.status) for endpoint in report.endpoints] == [
+        ("LiteLLM health", "healthy")
+    ]
+    assert "no unhealthy endpoints" in (report.endpoints[0].detail or "")
+
+
+async def test_litellm_health_reports_count_only_unhealthy_payloads() -> None:
+    report = normalize_litellm_health_response(
+        {
+            "healthy_count": 3,
+            "unhealthy_count": 1,
+        }
+    )
+
+    assert [(endpoint.model, endpoint.status) for endpoint in report.endpoints] == [
+        ("LiteLLM health", "unhealthy")
+    ]
+    assert "1 unhealthy endpoint" in (report.endpoints[0].error or "")

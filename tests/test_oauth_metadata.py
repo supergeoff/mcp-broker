@@ -50,7 +50,7 @@ async def test_direct_passthrough_protected_resource_metadata_is_proxied_and_rew
             json={
                 "resource": "https://googlemcp.example.com/mcp",
                 "authorization_servers": [
-                    "https://googlemcp.example.com/.well-known/oauth-authorization-server/mcp"
+                    "https://googlemcp.example.com/"
                 ],
             },
         )
@@ -83,7 +83,7 @@ async def test_direct_passthrough_protected_resource_metadata_is_proxied_and_rew
     assert response.json() == {
         "resource": "https://broker.example.com/googlemcp",
         "authorization_servers": [
-            "https://broker.example.com/.well-known/oauth-authorization-server/googlemcp"
+            "https://broker.example.com/googlemcp"
         ],
     }
 
@@ -127,9 +127,9 @@ async def test_direct_passthrough_authorization_server_metadata_is_proxied_and_r
         response = await client.get("/.well-known/oauth-authorization-server/googlemcp")
 
     assert response.status_code == 200
-    assert captured["path"] == "/.well-known/oauth-authorization-server/mcp"
+    assert captured["path"] == "/.well-known/oauth-authorization-server"
     assert response.json() == {
-        "issuer": "https://googlemcp.example.com",
+        "issuer": "https://broker.example.com/googlemcp",
         "authorization_endpoint": "https://broker.example.com/googlemcp/authorize",
         "token_endpoint": "https://broker.example.com/googlemcp/token",
         "registration_endpoint": "https://broker.example.com/googlemcp/register",

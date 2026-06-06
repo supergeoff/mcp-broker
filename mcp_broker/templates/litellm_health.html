@@ -18,6 +18,9 @@
             {% if endpoint.error %}
               <p class="card-description">{{ endpoint.error }}</p>
             {% endif %}
+            {% if endpoint.detail %}
+              <p class="card-description">{{ endpoint.detail }}</p>
+            {% endif %}
           </div>
         </div>
       </div>
