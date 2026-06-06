@@ -92,4 +92,39 @@
       {% include "discover.html" %}
     </div>
   </section>
+
+  {% if is_admin and retired_servers %}
+    <section class="card" style="margin-top: 16px;">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">Retired MCP servers</h2>
+          <p class="card-description">Inactive catalog entries are kept as a trace; saved secrets remain untouched.</p>
+        </div>
+      </div>
+      <div class="server-list">
+        {% for server in retired_servers %}
+          <div class="server-card server-card-retired">
+            <div class="server-card-header">
+              <div>
+                <h3 class="server-title">{{ server.name }}</h3>
+                <div class="badge-list">
+                  {% if server.source == "direct" %}
+                    <span class="badge">Direct</span>
+                    <span class="status-badge status-retired">Removed by admin</span>
+                  {% else %}
+                    <span class="badge">LiteLLM</span>
+                    <span class="status-badge status-retired">No longer in LiteLLM</span>
+                  {% endif %}
+                </div>
+              </div>
+              <form method="post" action="/api/mcp/remove">
+                <input type="hidden" name="mcp_name" value="{{ server.name }}">
+                <button class="button button-danger button-small" type="submit">Remove</button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
 {% endblock %}

@@ -51,7 +51,8 @@ async def test_proxy_injects_user_headers_and_removes_oauth_authorization(settin
     assert captured["query"] == "stream=true"
     assert captured["body"] == b'{"jsonrpc":"2.0"}'
     assert captured["headers"]["x-litellm-api-key"] == "Bearer litellm-user-key"
-    assert captured["headers"]["x-dokploy-token"] == "dokploy-user-token"
+    assert captured["headers"]["x-mcp-dokploy-x-dokploy-token"] == "dokploy-user-token"
+    assert "x-dokploy-token" not in captured["headers"]
     assert "authorization" not in captured["headers"]
 
 
@@ -90,9 +91,51 @@ async def test_named_mcp_route_targets_litellm_server_mcp_and_scopes_headers(set
 
     assert response.status_code == 200
     assert captured["path"] == "/dokploy/mcp"
-    assert captured["headers"]["x-dokploy_url"] == "https://dokploy.example.com"
-    assert captured["headers"]["x-dokploy_api_key"] == "dokploy-key"
+    assert captured["headers"]["x-mcp-dokploy-x-dokploy_url"] == "https://dokploy.example.com"
+    assert captured["headers"]["x-mcp-dokploy-x-dokploy_api_key"] == "dokploy-key"
+    assert "x-dokploy_url" not in captured["headers"]
+    assert "x-dokploy_api_key" not in captured["headers"]
     assert "x-context7-api-key" not in captured["headers"]
+    assert "x-mcp-context7-x-context7-api-key" not in captured["headers"]
+
+
+async def test_litellm_proxy_maps_saved_authorization_to_server_specific_mcp_header(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, content=b"ok")
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            secrets={
+                "gworkspace": {
+                    "Authorization": "Bearer upstream-google-token",
+                    "X-API-Key": "workspace-api-key",
+                }
+            }
+        ),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/gworkspace",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            content=b"{}",
+        )
+
+    assert response.status_code == 200
+    assert captured["headers"]["x-litellm-api-key"] == "Bearer litellm-user-key"
+    assert captured["headers"]["x-mcp-gworkspace-authorization"] == "Bearer upstream-google-token"
+    assert captured["headers"]["x-mcp-gworkspace-x-api-key"] == "workspace-api-key"
+    assert "authorization" not in captured["headers"]
+    assert "x-api-key" not in captured["headers"]
 
 
 async def test_named_mcp_subpath_routes_under_litellm_server_mcp(settings) -> None:
@@ -161,11 +204,16 @@ async def test_direct_broker_auth_mcp_proxies_without_litellm_key(settings) -> N
         settings=settings,
         repository=FakeRepository(
             litellm_key=None,
-            secrets={"googlemcp": {"X-GOOGLE-WORKSPACE": "workspace-token"}},
+            secrets={
+                "googlemcp": {
+                    "Authorization": "Bearer direct-upstream-token",
+                    "X-GOOGLE-WORKSPACE": "workspace-token",
+                }
+            },
             mcp_servers={
                 "googlemcp": McpServerConfiguration(
                     name="googlemcp",
-                    required_headers=("X-GOOGLE-WORKSPACE",),
+                    required_headers=("Authorization", "X-GOOGLE-WORKSPACE"),
                     delegated_auth_passthrough=False,
                     auth_type=None,
                     source="direct",
@@ -191,8 +239,8 @@ async def test_direct_broker_auth_mcp_proxies_without_litellm_key(settings) -> N
     assert response.text == "direct-ok"
     assert captured["url"] == "https://googlemcp.example.com/mcp?stream=true"
     assert captured["body"] == b'{"jsonrpc":"2.0"}'
+    assert captured["headers"]["authorization"] == "Bearer direct-upstream-token"
     assert captured["headers"]["x-google-workspace"] == "workspace-token"
-    assert "authorization" not in captured["headers"]
     assert "x-litellm-api-key" not in captured["headers"]
 
 

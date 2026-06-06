@@ -62,7 +62,7 @@
         <input type="hidden" name="mcp_name" value="{{ server.name }}">
         <div class="field">
           <label for="manual-header-{{ server.name }}">Header name</label>
-          <input id="manual-header-{{ server.name }}" name="header_name" autocomplete="off" placeholder="X-API-KEY" required>
+          <input id="manual-header-{{ server.name }}" name="header_name" list="common-secret-headers" autocomplete="off" placeholder="Authorization" required>
         </div>
         <div class="field">
           <label for="manual-secret-{{ server.name }}">Secret value</label>

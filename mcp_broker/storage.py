@@ -20,6 +20,7 @@ class Repository(Protocol):
     async def upsert_mcp_servers(self, servers: list["McpServerConfiguration"]) -> None: ...
     async def upsert_direct_mcp_server(self, server: "McpServerConfiguration") -> None: ...
     async def delete_direct_mcp_server(self, mcp_name: str) -> None: ...
+    async def delete_mcp_server(self, mcp_name: str) -> None: ...
     async def get_mcp_server(self, mcp_name: str) -> "McpServerConfiguration | None": ...
     async def list_mcp_servers(self) -> list["McpServerConfiguration"]: ...
     async def set_mcp_delegated_auth(self, mcp_name: str, enabled: bool) -> None: ...
@@ -46,6 +47,7 @@ class McpServerConfiguration:
     auth_type: str | None = None
     source: str = MCP_SOURCE_LITELLM
     direct_url: str | None = None
+    active: bool = True
 
 
 class VaultRepository:
@@ -162,6 +164,7 @@ class VaultRepository:
 
     async def upsert_mcp_servers(self, servers: list[McpServerConfiguration]) -> None:
         async with self._session_factory() as session:
+            active_names: set[str] = set()
             for server in servers:
                 normalized = _normalize_mcp_server_configuration(
                     McpServerConfiguration(
@@ -170,8 +173,10 @@ class VaultRepository:
                         delegated_auth_passthrough=server.delegated_auth_passthrough,
                         auth_type=server.auth_type,
                         source=MCP_SOURCE_LITELLM,
+                        active=True,
                     )
                 )
+                active_names.add(normalized.name)
                 stored = await session.get(McpServer, normalized.name)
                 if stored is not None and stored.source == MCP_SOURCE_DIRECT:
                     continue
@@ -185,6 +190,7 @@ class VaultRepository:
                             auth_type=normalized.auth_type,
                             source=MCP_SOURCE_LITELLM,
                             direct_url=None,
+                            active=True,
                         )
                     )
                 else:
@@ -193,6 +199,17 @@ class VaultRepository:
                     stored.auth_type = normalized.auth_type
                     stored.source = MCP_SOURCE_LITELLM
                     stored.direct_url = None
+                    stored.active = True
+            rows = (
+                await session.scalars(
+                    select(McpServer).where(
+                        McpServer.source == MCP_SOURCE_LITELLM,
+                        McpServer.name.not_in(active_names),
+                    )
+                )
+            ).all()
+            for row in rows:
+                row.active = False
             await session.commit()
 
     async def upsert_direct_mcp_server(self, server: McpServerConfiguration) -> None:
@@ -218,6 +235,7 @@ class VaultRepository:
                         auth_type=normalized.auth_type,
                         source=normalized.source,
                         direct_url=normalized.direct_url,
+                        active=True,
                     )
                 )
             else:
@@ -226,23 +244,27 @@ class VaultRepository:
                 stored.auth_type = normalized.auth_type
                 stored.source = normalized.source
                 stored.direct_url = normalized.direct_url
+                stored.active = True
             await session.commit()
 
     async def delete_direct_mcp_server(self, mcp_name: str) -> None:
         normalized_name = mcp_name.strip()
         async with self._session_factory() as session:
-            await session.execute(
-                delete(McpServer).where(
-                    McpServer.name == normalized_name,
-                    McpServer.source == MCP_SOURCE_DIRECT,
-                )
-            )
+            stored = await session.get(McpServer, normalized_name)
+            if stored is not None and stored.source == MCP_SOURCE_DIRECT:
+                stored.active = False
+            await session.commit()
+
+    async def delete_mcp_server(self, mcp_name: str) -> None:
+        normalized_name = mcp_name.strip()
+        async with self._session_factory() as session:
+            await session.execute(delete(McpServer).where(McpServer.name == normalized_name))
             await session.commit()
 
     async def get_mcp_server(self, mcp_name: str) -> McpServerConfiguration | None:
         async with self._session_factory() as session:
             stored = await session.get(McpServer, mcp_name.strip())
-            if stored is None:
+            if stored is None or not stored.active:
                 return None
             return _mcp_server_configuration_from_row(stored)
 
@@ -263,6 +285,7 @@ class VaultRepository:
                         delegated_auth_passthrough=enabled,
                         source=MCP_SOURCE_LITELLM,
                         direct_url=None,
+                        active=True,
                     )
                 )
             else:
@@ -317,6 +340,7 @@ def _normalize_mcp_server_configuration(server: McpServerConfiguration) -> McpSe
         auth_type=server.auth_type.strip() if server.auth_type and server.auth_type.strip() else None,
         source=source,
         direct_url=direct_url,
+        active=server.active,
     )
 
 
@@ -332,4 +356,5 @@ def _mcp_server_configuration_from_row(row: McpServer) -> McpServerConfiguration
         auth_type=row.auth_type,
         source=row.source or MCP_SOURCE_LITELLM,
         direct_url=row.direct_url,
+        active=row.active,
     )

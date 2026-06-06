@@ -197,7 +197,7 @@ async def test_vault_repository_does_not_overwrite_direct_server_with_litellm_di
     await engine.dispose()
 
 
-async def test_vault_repository_deletes_only_direct_mcp_server(encryption_key) -> None:
+async def test_vault_repository_retires_litellm_servers_missing_from_discovery(encryption_key) -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -208,7 +208,14 @@ async def test_vault_repository_deletes_only_direct_mcp_server(encryption_key) -
     await repository.upsert_mcp_servers(
         [
             McpServerConfiguration(
-                name="context7",
+                name="daytona",
+                required_headers=("X-DAYTONA-TOKEN",),
+                delegated_auth_passthrough=False,
+                auth_type="bearer_token",
+                source="litellm",
+            ),
+            McpServerConfiguration(
+                name="github",
                 required_headers=(),
                 delegated_auth_passthrough=True,
                 auth_type="oauth2",
@@ -216,6 +223,51 @@ async def test_vault_repository_deletes_only_direct_mcp_server(encryption_key) -
             )
         ]
     )
+    await repository.upsert_mcp_servers(
+        [
+            McpServerConfiguration(
+                name="github",
+                required_headers=(),
+                delegated_auth_passthrough=True,
+                auth_type="oauth2",
+                source="litellm",
+            )
+        ]
+    )
+
+    assert await repository.list_mcp_servers() == [
+        McpServerConfiguration(
+            name="daytona",
+            required_headers=("X-DAYTONA-TOKEN",),
+            delegated_auth_passthrough=False,
+            auth_type="bearer_token",
+            source="litellm",
+            direct_url=None,
+            active=False,
+        ),
+        McpServerConfiguration(
+            name="github",
+            required_headers=(),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="litellm",
+            direct_url=None,
+            active=True,
+        )
+    ]
+    assert await repository.get_mcp_server("daytona") is None
+
+    await engine.dispose()
+
+
+async def test_vault_repository_retires_direct_mcp_server(encryption_key) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    repository = VaultRepository(session_factory, FernetCipher(encryption_key))
+
     await repository.upsert_direct_mcp_server(
         McpServerConfiguration(
             name="googlemcp",
@@ -227,18 +279,47 @@ async def test_vault_repository_deletes_only_direct_mcp_server(encryption_key) -
         )
     )
 
-    await repository.delete_direct_mcp_server("context7")
     await repository.delete_direct_mcp_server("googlemcp")
 
+    assert await repository.get_mcp_server("googlemcp") is None
     assert await repository.list_mcp_servers() == [
         McpServerConfiguration(
-            name="context7",
+            name="googlemcp",
             required_headers=(),
             delegated_auth_passthrough=True,
             auth_type="oauth2",
-            source="litellm",
-            direct_url=None,
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp",
+            active=False,
         )
     ]
+
+    await engine.dispose()
+
+
+async def test_vault_repository_removes_retired_mcp_server_without_deleting_secrets(encryption_key) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    repository = VaultRepository(session_factory, FernetCipher(encryption_key))
+
+    await repository.upsert_secret("pocket-sub", "daytona", "X-DAYTONA-TOKEN", "daytona-token")
+    await repository.upsert_mcp_servers(
+        [
+            McpServerConfiguration(
+                name="daytona",
+                required_headers=("X-DAYTONA-TOKEN",),
+                source="litellm",
+            )
+        ]
+    )
+    await repository.upsert_mcp_servers([])
+
+    await repository.delete_mcp_server("daytona")
+
+    assert await repository.list_mcp_servers() == []
+    assert await repository.get_secrets("pocket-sub", "daytona") == {"X-DAYTONA-TOKEN": "daytona-token"}
 
     await engine.dispose()

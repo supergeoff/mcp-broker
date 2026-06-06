@@ -194,7 +194,9 @@ def create_app(
         repository = _repository(app)
         litellm_key_saved = await repository.get_litellm_key(user["sub"]) is not None
         mcp_servers = await repository.list_mcp_servers()
-        catalog_names = {server.name for server in mcp_servers}
+        active_servers = [server for server in mcp_servers if server.active]
+        retired_servers = [server for server in mcp_servers if not server.active]
+        catalog_names = {server.name for server in active_servers}
         secrets = {
             mcp_name: header_names
             for mcp_name, header_names in (await repository.list_secret_headers(user["sub"])).items()
@@ -210,7 +212,8 @@ def create_app(
                 "user": user,
                 "litellm_key_saved": litellm_key_saved,
                 "secrets": secrets,
-                "servers": mcp_servers,
+                "servers": active_servers,
+                "retired_servers": retired_servers,
                 "current_page": "dashboard",
                 "is_admin": is_admin,
             },
@@ -237,6 +240,12 @@ def create_app(
         catalog = await discovery.discover_catalog()
         await repository.upsert_mcp_servers(_mcp_server_configurations(catalog))
         servers = await discovery.discover_for_user(litellm_key, catalog)
+        direct_servers = [
+            server
+            for server in await repository.list_mcp_servers()
+            if server.source == MCP_SOURCE_DIRECT and server.active
+        ]
+        servers = sorted([*servers, *direct_servers], key=lambda server: server.name)
         email = str(user.get("email") or "").lower()
         return templates.TemplateResponse(
             request=request,
@@ -266,9 +275,9 @@ def create_app(
         user = _require_session_user(request)
         form = await request.form()
         mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
-        header_name = str(form.get("header_name", "")).strip()
-        if not header_name.startswith("X-"):
-            raise HTTPException(status_code=400, detail="A X-... header name is required")
+        header_name = normalize_secret_header_name(str(form.get("header_name", "")))
+        if not is_valid_secret_header_name(header_name):
+            raise HTTPException(status_code=400, detail="A valid header name is required")
         await _repository(app).delete_secret(user["sub"], mcp_name, header_name)
         return RedirectResponse("/", status_code=303)
 
@@ -291,6 +300,21 @@ def create_app(
         await _repository(app).set_mcp_delegated_auth(mcp_name, enabled)
         return RedirectResponse("/", status_code=303)
 
+    @app.post("/api/mcp/remove")
+    async def remove_retired_mcp(request: Request):
+        user = _require_session_user(request)
+        if not _is_admin_user(user, settings):
+            raise HTTPException(status_code=403, detail="Admin only")
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
+        server = next((item for item in await _repository(app).list_mcp_servers() if item.name == mcp_name), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        if server.active:
+            raise HTTPException(status_code=400, detail="Only retired MCP servers can be removed")
+        await _repository(app).delete_mcp_server(mcp_name)
+        return RedirectResponse("/", status_code=303)
+
     @app.get("/admin")
     async def admin(request: Request):
         user = _require_session_user(request)
@@ -299,7 +323,11 @@ def create_app(
             raise HTTPException(status_code=403, detail="Admin only")
         repository = _repository(app)
         states = await repository.list_user_states()
-        direct_servers = [server for server in await repository.list_mcp_servers() if server.source == MCP_SOURCE_DIRECT]
+        direct_servers = [
+            server
+            for server in await repository.list_mcp_servers()
+            if server.source == MCP_SOURCE_DIRECT and server.active
+        ]
         return templates.TemplateResponse(
             request=request,
             name="admin.html",
@@ -537,3 +565,5 @@ def _ensure_mcp_server_catalog_columns(connection: Connection) -> None:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'litellm'"))
     if "direct_url" not in columns:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN direct_url TEXT"))
+    if "active" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE"))

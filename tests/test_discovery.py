@@ -51,6 +51,7 @@ def test_normalize_servers_response_preserves_litellm_mcp_auth_metadata() -> Non
     assert servers[0].auth_type == "oauth2"
     assert servers[0].delegated_auth_passthrough is True
     assert servers[0].required_headers == (
+        "Authorization",
         "X-GITHUB-ENV-TOKEN",
         "X-GITHUB-TOKEN",
         "X-STATIC-TOKEN",
@@ -68,7 +69,7 @@ def test_normalize_servers_response_extracts_valid_custom_extra_headers() -> Non
     servers = normalize_servers_response(payload)
 
     assert len(servers) == 1
-    assert servers[0].required_headers == ("xc-mcp-token",)
+    assert servers[0].required_headers == ("Authorization", "xc-mcp-token")
 
 
 async def test_discovery_uses_admin_catalog_and_user_tool_fallback(settings) -> None:

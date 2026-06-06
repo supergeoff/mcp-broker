@@ -3,7 +3,6 @@ import re
 HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 MAX_HEADER_NAME_LENGTH = 128
 RESERVED_SECRET_HEADER_NAMES = {
-    "authorization",
     "connection",
     "content-length",
     "host",

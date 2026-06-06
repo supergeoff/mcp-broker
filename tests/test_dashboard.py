@@ -105,7 +105,7 @@ async def test_dashboard_saves_valid_custom_secret_header_for_named_mcp(settings
     assert fake_repository.secrets["dokploy"]["xc-mcp-token"] == "mcp-secret"
 
 
-async def test_dashboard_rejects_reserved_secret_header_for_named_mcp(settings, fake_repository) -> None:
+async def test_dashboard_saves_authorization_secret_header_for_named_mcp(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
     cookie = _session_cookie(
         settings.session_secret,
@@ -122,13 +122,39 @@ async def test_dashboard_rejects_reserved_secret_header_for_named_mcp(settings, 
             data={
                 "mcp_name": "dokploy",
                 "header_name": "Authorization",
-                "value": "upstream-auth",
+                "value": "Bearer upstream-token",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.secrets["dokploy"]["Authorization"] == "Bearer upstream-token"
+
+
+async def test_dashboard_rejects_litellm_api_key_as_secret_header(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/secret",
+            data={
+                "mcp_name": "dokploy",
+                "header_name": "x-litellm-api-key",
+                "value": "Bearer litellm-user-key",
             },
             follow_redirects=False,
         )
 
     assert response.status_code == 400
-    assert "Authorization" not in fake_repository.secrets["dokploy"]
+    assert "x-litellm-api-key" not in fake_repository.secrets["dokploy"]
 
 
 async def test_dashboard_deletes_secret_header_for_named_mcp(settings, fake_repository) -> None:
@@ -164,6 +190,37 @@ async def test_dashboard_deletes_secret_header_for_named_mcp(settings, fake_repo
         "dokploy": {"X-DOKPLOY-ORG": "dokploy-org"},
         "github": {"X-GITHUB-TOKEN": "github-token"},
     }
+
+
+async def test_dashboard_deletes_authorization_secret_header_for_named_mcp(settings, fake_repository) -> None:
+    fake_repository.secrets = {
+        "dokploy": {
+            "Authorization": "Bearer upstream-token",
+            "X-DOKPLOY-ORG": "dokploy-org",
+        }
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/secret/delete",
+            data={
+                "mcp_name": "dokploy",
+                "header_name": "Authorization",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.secrets == {"dokploy": {"X-DOKPLOY-ORG": "dokploy-org"}}
 
 
 async def test_dashboard_deletes_all_secret_headers_for_named_mcp(settings, fake_repository) -> None:
@@ -360,6 +417,118 @@ async def test_dashboard_hides_saved_headers_for_servers_not_in_catalog(settings
     assert "X-GOOGLE-WORKSPACE" not in response.text
 
 
+async def test_dashboard_renders_retired_mcp_servers_with_admin_remove_control(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "daytona": McpServerConfiguration(
+            name="daytona",
+            required_headers=("X-DAYTONA-TOKEN",),
+            delegated_auth_passthrough=False,
+            auth_type="bearer_token",
+            source="litellm",
+            active=False,
+        ),
+        "github": McpServerConfiguration(
+            name="github",
+            required_headers=("X-GITHUB-TOKEN",),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="litellm",
+            active=True,
+        ),
+    }
+    fake_repository.secrets = {
+        "daytona": {"X-DAYTONA-TOKEN": "daytona-token"},
+        "github": {"X-GITHUB-TOKEN": "github-token"},
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert 'class="server-card server-card-retired"' in response.text
+    assert "Retired MCP servers" in response.text
+    assert "daytona" in response.text
+    assert "No longer in LiteLLM" in response.text
+    assert 'action="/api/mcp/remove"' in response.text
+    assert 'name="mcp_name" value="daytona"' in response.text
+    assert "X-DAYTONA-TOKEN" not in response.text
+    assert "github" in response.text
+    assert "X-GITHUB-TOKEN" in response.text
+
+
+async def test_dashboard_removes_retired_mcp_catalog_entry_without_deleting_secrets(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "daytona": McpServerConfiguration(
+            name="daytona",
+            required_headers=("X-DAYTONA-TOKEN",),
+            source="litellm",
+            active=False,
+        )
+    }
+    fake_repository.secrets = {
+        "daytona": {"X-DAYTONA-TOKEN": "daytona-token"},
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/mcp/remove",
+            data={"mcp_name": "daytona"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.mcp_servers == {}
+    assert fake_repository.secrets == {"daytona": {"X-DAYTONA-TOKEN": "daytona-token"}}
+
+
+async def test_non_admin_cannot_remove_retired_mcp_catalog_entry(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "daytona": McpServerConfiguration(
+            name="daytona",
+            required_headers=(),
+            source="litellm",
+            active=False,
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "user@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/mcp/remove",
+            data={"mcp_name": "daytona"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    assert "daytona" in fake_repository.mcp_servers
+
+
 async def test_dashboard_renders_reveal_controls_for_every_secret_input(settings, fake_repository) -> None:
     fake_repository.mcp_servers = {
         "github": McpServerConfiguration(
@@ -392,6 +561,35 @@ async def test_dashboard_renders_reveal_controls_for_every_secret_input(settings
     assert "toggleBrokerSecret" in response.text
     assert "Show secret value" in response.text
     assert "Hide secret value" in response.text
+
+
+async def test_dashboard_renders_common_header_suggestions_without_litellm_api_key(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "github": McpServerConfiguration(
+            name="github",
+            required_headers=(),
+            delegated_auth_passthrough=False,
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert 'id="common-secret-headers"' in response.text
+    assert 'list="common-secret-headers"' in response.text
+    assert 'value="Authorization"' in response.text
+    assert 'value="X-API-Key"' in response.text
+    assert "x-litellm-api-key" not in response.text
 
 
 async def test_admin_uses_dokploy_shell_and_status_badges(settings, fake_repository) -> None:
@@ -468,7 +666,7 @@ async def test_admin_adds_direct_passthrough_mcp(settings, fake_repository) -> N
                 "direct_url": "https://googlemcp.example.com/mcp/",
                 "auth_mode": "passthrough",
                 "auth_type": "oauth2",
-                "required_headers": "X-GOOGLE-WORKSPACE, X-GOOGLE-ORG",
+                "required_headers": "Authorization, X-GOOGLE-WORKSPACE, X-GOOGLE-ORG",
             },
             follow_redirects=False,
         )
@@ -476,7 +674,7 @@ async def test_admin_adds_direct_passthrough_mcp(settings, fake_repository) -> N
     assert response.status_code == 303
     assert fake_repository.mcp_servers["googlemcp"] == McpServerConfiguration(
         name="googlemcp",
-        required_headers=("X-GOOGLE-ORG", "X-GOOGLE-WORKSPACE"),
+        required_headers=("Authorization", "X-GOOGLE-ORG", "X-GOOGLE-WORKSPACE"),
         delegated_auth_passthrough=True,
         auth_type="oauth2",
         source="direct",
@@ -513,7 +711,7 @@ async def test_admin_deletes_direct_mcp(settings, fake_repository) -> None:
         )
 
     assert response.status_code == 303
-    assert fake_repository.mcp_servers == {}
+    assert fake_repository.mcp_servers["googlemcp"].active is False
 
 
 async def test_non_admin_cannot_add_or_delete_direct_mcp(settings, fake_repository) -> None:
@@ -631,3 +829,39 @@ async def test_discovery_stores_admin_mcp_catalog_metadata_even_when_user_filter
     assert response.status_code == 200
     assert fake_repository.mcp_servers["github"].delegated_auth_passthrough is True
     assert fake_repository.mcp_servers["github"].auth_type == "oauth2"
+
+
+async def test_discovery_retires_litellm_servers_missing_from_admin_catalog(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "daytona": McpServerConfiguration(
+            name="daytona",
+            required_headers=("X-DAYTONA-TOKEN",),
+            source="litellm",
+            active=True,
+        )
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("x-litellm-api-key")
+        if request.url.path == "/v1/mcp/server" and auth == "Bearer admin-read-key":
+            return httpx.Response(200, json={"servers": []})
+        if request.url.path == "/v1/mcp/server" and auth == "Bearer litellm-user-key":
+            return httpx.Response(200, json={"servers": []})
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as litellm_client:
+        app = create_app(settings=settings, repository=fake_repository, http_client=litellm_client)
+        cookie = _session_cookie(
+            settings.session_secret,
+            {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://testserver",
+        ) as client:
+            client.cookies.set("session", cookie)
+            response = await client.post("/api/discover")
+
+    assert response.status_code == 200
+    assert fake_repository.mcp_servers["daytona"].active is False

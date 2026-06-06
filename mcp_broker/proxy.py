@@ -48,7 +48,7 @@ async def proxy_mcp_request(
     upstream_request = http_client.build_request(
         request.method,
         url,
-        headers=_upstream_headers(request.headers, litellm_key, secrets),
+        headers=_upstream_headers(request.headers, mcp_name, litellm_key, secrets),
         content=await request.body(),
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
@@ -227,6 +227,7 @@ def _upstream_url(settings: Settings, mcp_name: str, subpath: str, query: str) -
 
 def _upstream_headers(
     incoming: Mapping[str, str],
+    mcp_name: str,
     litellm_key: str,
     secrets: Mapping[str, str],
 ) -> dict[str, str]:
@@ -236,8 +237,15 @@ def _upstream_headers(
         if name.lower() not in REQUEST_BLOCKLIST
     }
     headers["x-litellm-api-key"] = litellm_auth_value(litellm_key)
-    headers.update(secrets)
+    headers.update(_litellm_mcp_secret_headers(mcp_name, secrets))
     return headers
+
+
+def _litellm_mcp_secret_headers(mcp_name: str, secrets: Mapping[str, str]) -> dict[str, str]:
+    return {
+        f"x-mcp-{mcp_name}-{header_name.lower()}": value
+        for header_name, value in secrets.items()
+    }
 
 
 def _direct_broker_upstream_headers(
