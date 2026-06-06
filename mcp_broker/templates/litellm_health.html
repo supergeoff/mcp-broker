@@ -1,0 +1,28 @@
+{% if report.endpoints %}
+  <div class="server-list">
+    {% for endpoint in report.endpoints %}
+      <div class="server-card">
+        <div class="server-card-header">
+          <div>
+            <h3 class="server-title">{{ endpoint.model }}</h3>
+            <div class="badge-list">
+              {% if endpoint.status == "healthy" %}
+                <span class="status-badge status-saved">healthy</span>
+              {% else %}
+                <span class="status-badge status-missing">unhealthy</span>
+              {% endif %}
+              {% if endpoint.api_base %}
+                <span class="badge">{{ endpoint.api_base }}</span>
+              {% endif %}
+            </div>
+            {% if endpoint.error %}
+              <p class="card-description">{{ endpoint.error }}</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty-state">No model health data returned.</div>
+{% endif %}

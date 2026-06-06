@@ -2,6 +2,10 @@
 
 {% block title %}MCP Broker Admin{% endblock %}
 
+{% block head_extra %}
+  <script src="https://unpkg.com/htmx.org@2.0.7"></script>
+{% endblock %}
+
 {% block content %}
   <header class="page-header">
     <div>
@@ -46,6 +50,21 @@
   <section class="card" style="margin-top: 16px;">
     <div class="card-header">
       <div>
+        <h2 class="card-title">LiteLLM upstream health</h2>
+        <p class="card-description">Per-model provider status from LiteLLM.</p>
+      </div>
+      <button class="button button-secondary" type="button" hx-post="/api/litellm/upstream-health" hx-target="#litellm-upstream-health-results" hx-swap="innerHTML">
+        Check upstream auth
+      </button>
+    </div>
+    <div id="litellm-upstream-health-results">
+      <div class="empty-state">No upstream health check yet.</div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top: 16px;">
+    <div class="card-header">
+      <div>
         <h2 class="card-title">Direct MCP servers</h2>
         <p class="card-description">Add MCP endpoints that should bypass LiteLLM.</p>
       </div>
@@ -53,11 +72,11 @@
     <form class="form-grid" method="post" action="/api/mcp/direct">
       <div class="field">
         <label for="direct-mcp-name">Name</label>
-        <input id="direct-mcp-name" name="name" autocomplete="off" placeholder="googlemcp" required>
+        <input id="direct-mcp-name" name="name" autocomplete="off" placeholder="internal-mcp" required>
       </div>
       <div class="field">
         <label for="direct-mcp-url">Direct MCP URL</label>
-        <input id="direct-mcp-url" name="direct_url" autocomplete="off" placeholder="https://googlemcp.supergeoff.top/mcp" required>
+        <input id="direct-mcp-url" name="direct_url" autocomplete="off" placeholder="https://mcp.example.com/mcp" required>
       </div>
       <div class="field">
         <label for="direct-mcp-auth-mode">Auth mode</label>

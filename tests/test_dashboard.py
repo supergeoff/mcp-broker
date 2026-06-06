@@ -613,6 +613,48 @@ async def test_admin_uses_dokploy_shell_and_status_badges(settings, fake_reposit
     assert "admin@example.com" in response.text
 
 
+async def test_admin_direct_mcp_form_uses_neutral_placeholders(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/admin")
+
+    assert response.status_code == 200
+    assert 'placeholder="internal-mcp"' in response.text
+    assert 'placeholder="https://mcp.example.com/mcp"' in response.text
+    assert "googlemcp" not in response.text
+    assert "googlemcp.supergeoff.top" not in response.text
+
+
+async def test_admin_renders_litellm_upstream_health_check(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/admin")
+
+    assert response.status_code == 200
+    assert "LiteLLM upstream health" in response.text
+    assert 'hx-post="/api/litellm/upstream-health"' in response.text
+    assert 'hx-target="#litellm-upstream-health-results"' in response.text
+    assert "htmx.org" in response.text
+
+
 async def test_admin_renders_direct_mcp_form_and_entries(settings, fake_repository) -> None:
     fake_repository.mcp_servers = {
         "googlemcp": McpServerConfiguration(
@@ -742,6 +784,68 @@ async def test_non_admin_cannot_add_or_delete_direct_mcp(settings, fake_reposito
     assert add_response.status_code == 403
     assert delete_response.status_code == 403
     assert fake_repository.mcp_servers == {}
+
+
+async def test_admin_checks_litellm_upstream_health(settings, fake_repository) -> None:
+    captured: dict[str, str | None] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["authorization"] = request.headers.get("authorization")
+        return httpx.Response(
+            200,
+            json={
+                "healthy_endpoints": [
+                    {"model": "gpt-4o-mini", "api_base": "https://api.openai.com/v1"}
+                ],
+                "unhealthy_endpoints": [
+                    {
+                        "model": "claude-sonnet",
+                        "api_base": "https://api.anthropic.com",
+                        "error": "401 upstream auth failed",
+                    }
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as litellm_client:
+        app = create_app(settings=settings, repository=fake_repository, http_client=litellm_client)
+        cookie = _session_cookie(
+            settings.session_secret,
+            {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://testserver",
+        ) as client:
+            client.cookies.set("session", cookie)
+            response = await client.post("/api/litellm/upstream-health")
+
+    assert response.status_code == 200
+    assert captured == {"path": "/health", "authorization": "Bearer admin-read-key"}
+    assert "gpt-4o-mini" in response.text
+    assert "claude-sonnet" in response.text
+    assert "healthy" in response.text
+    assert "unhealthy" in response.text
+    assert "401 upstream auth failed" in response.text
+
+
+async def test_non_admin_cannot_check_litellm_upstream_health(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "user@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post("/api/litellm/upstream-health")
+
+    assert response.status_code == 403
 
 
 async def test_discovery_partial_uses_result_cards_for_named_mcp(settings, fake_repository) -> None:

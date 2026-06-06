@@ -17,6 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from mcp_broker.config import Settings
 from mcp_broker.discovery import DiscoveryClient
+from mcp_broker.litellm_health import LiteLLMHealthClient
 from mcp_broker.models import Base
 from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
@@ -314,6 +315,18 @@ def create_app(
             raise HTTPException(status_code=400, detail="Only retired MCP servers can be removed")
         await _repository(app).delete_mcp_server(mcp_name)
         return RedirectResponse("/", status_code=303)
+
+    @app.post("/api/litellm/upstream-health")
+    async def check_litellm_upstream_health(request: Request):
+        user = _require_session_user(request)
+        if not _is_admin_user(user, settings):
+            raise HTTPException(status_code=403, detail="Admin only")
+        report = await LiteLLMHealthClient(settings, _http_client(app)).check_upstream_health()
+        return templates.TemplateResponse(
+            request=request,
+            name="litellm_health.html",
+            context={"request": request, "report": report},
+        )
 
     @app.get("/admin")
     async def admin(request: Request):
