@@ -20,6 +20,8 @@ from mcp_broker.discovery import DiscoveryClient
 from mcp_broker.models import Base
 from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
+from mcp_broker.proxy import proxy_direct_broker_mcp_request, proxy_direct_oauth_endpoint_request
+from mcp_broker.proxy import proxy_direct_passthrough_mcp_request
 from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
 from mcp_broker.secret_headers import is_valid_secret_header_name, normalize_secret_header_name
@@ -349,7 +351,15 @@ def create_app(
         return await _handle_mcp(request, _normalize_mcp_name(mcp_name), subpath)
 
     async def _handle_mcp(request: Request, mcp_name: str, subpath: str):
-        if await _is_delegated_mcp(app, mcp_name):
+        server = await _repository(app).get_mcp_server(mcp_name)
+        if server and server.delegated_auth_passthrough:
+            if server.source == MCP_SOURCE_DIRECT:
+                return await proxy_direct_passthrough_mcp_request(
+                    request=request,
+                    server=server,
+                    subpath=subpath,
+                    http_client=_http_client(app),
+                )
             return await proxy_delegated_mcp_request(
                 request=request,
                 mcp_name=mcp_name,
@@ -369,6 +379,15 @@ def create_app(
         await _repository(app).upsert_user(claims["sub"], claims.get("email"))
         if not app.state.rate_limiter.allow(claims["sub"]):
             raise HTTPException(status_code=429, detail="Too many MCP requests. Try again later.")
+        if server and server.source == MCP_SOURCE_DIRECT:
+            return await proxy_direct_broker_mcp_request(
+                request=request,
+                server=server,
+                subpath=subpath,
+                user_sub=claims["sub"],
+                repository=_repository(app),
+                http_client=_http_client(app),
+            )
         return await proxy_mcp_request(
             request=request,
             mcp_name=mcp_name,
@@ -380,8 +399,16 @@ def create_app(
         )
 
     async def _handle_delegated_oauth_endpoint(request: Request, mcp_name: str, endpoint: str):
-        if not await _is_delegated_mcp(app, mcp_name):
+        server = await _repository(app).get_mcp_server(mcp_name)
+        if not server or not server.delegated_auth_passthrough:
             return await _handle_mcp(request, mcp_name, endpoint)
+        if server.source == MCP_SOURCE_DIRECT:
+            return await proxy_direct_oauth_endpoint_request(
+                request=request,
+                server=server,
+                endpoint=endpoint,
+                http_client=_http_client(app),
+            )
         return await proxy_delegated_litellm_request(
             request=request,
             path=f"/{mcp_name}/{endpoint}",

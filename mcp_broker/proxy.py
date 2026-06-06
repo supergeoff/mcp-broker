@@ -9,7 +9,7 @@ from starlette.responses import StreamingResponse
 
 from mcp_broker.config import Settings
 from mcp_broker.security import litellm_auth_value
-from mcp_broker.storage import Repository
+from mcp_broker.storage import McpServerConfiguration, Repository
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -101,6 +101,81 @@ async def proxy_delegated_litellm_request(
     )
 
 
+async def proxy_direct_broker_mcp_request(
+    *,
+    request: Request,
+    server: McpServerConfiguration,
+    subpath: str,
+    user_sub: str,
+    repository: Repository,
+    http_client: httpx.AsyncClient,
+) -> StreamingResponse:
+    if not server.direct_url:
+        raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
+    secrets = await repository.get_secrets(user_sub, server.name)
+    upstream_request = http_client.build_request(
+        request.method,
+        _direct_mcp_url(server.direct_url, subpath, request.url.query),
+        headers=_direct_broker_upstream_headers(request.headers, secrets),
+        content=await request.body(),
+    )
+    upstream_response = await http_client.send(upstream_request, stream=True)
+    return StreamingResponse(
+        _response_body(upstream_response),
+        status_code=upstream_response.status_code,
+        headers=_response_headers(upstream_response.headers),
+        background=BackgroundTask(upstream_response.aclose),
+    )
+
+
+async def proxy_direct_passthrough_mcp_request(
+    *,
+    request: Request,
+    server: McpServerConfiguration,
+    subpath: str,
+    http_client: httpx.AsyncClient,
+) -> StreamingResponse:
+    if not server.direct_url:
+        raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
+    upstream_request = http_client.build_request(
+        request.method,
+        _direct_mcp_url(server.direct_url, subpath, request.url.query),
+        headers=_delegated_upstream_headers(request.headers),
+        content=await request.body(),
+    )
+    upstream_response = await http_client.send(upstream_request, stream=True)
+    return StreamingResponse(
+        _response_body(upstream_response),
+        status_code=upstream_response.status_code,
+        headers=_response_headers(upstream_response.headers),
+        background=BackgroundTask(upstream_response.aclose),
+    )
+
+
+async def proxy_direct_oauth_endpoint_request(
+    *,
+    request: Request,
+    server: McpServerConfiguration,
+    endpoint: str,
+    http_client: httpx.AsyncClient,
+) -> StreamingResponse:
+    if not server.direct_url:
+        raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
+    upstream_request = http_client.build_request(
+        request.method,
+        _direct_oauth_url(server.direct_url, endpoint, request.url.query),
+        headers=_delegated_upstream_headers(request.headers),
+        content=await request.body(),
+    )
+    upstream_response = await http_client.send(upstream_request, stream=True)
+    return StreamingResponse(
+        _response_body(upstream_response),
+        status_code=upstream_response.status_code,
+        headers=_response_headers(upstream_response.headers),
+        background=BackgroundTask(upstream_response.aclose),
+    )
+
+
 async def proxy_delegated_oauth_metadata_request(
     *,
     request: Request,
@@ -142,12 +217,43 @@ def _upstream_headers(
     return headers
 
 
+def _direct_broker_upstream_headers(
+    incoming: Mapping[str, str],
+    secrets: Mapping[str, str],
+) -> dict[str, str]:
+    headers = {
+        name: value
+        for name, value in incoming.items()
+        if name.lower() not in REQUEST_BLOCKLIST | {"x-litellm-api-key"}
+    }
+    headers.update(secrets)
+    return headers
+
+
 def _delegated_upstream_headers(incoming: Mapping[str, str]) -> dict[str, str]:
     return {
         name: value
         for name, value in incoming.items()
         if name.lower() not in DELEGATED_REQUEST_BLOCKLIST
     }
+
+
+def _direct_mcp_url(direct_url: str, subpath: str, query: str) -> httpx.URL:
+    url = httpx.URL(direct_url)
+    base_path = url.path.rstrip("/")
+    if subpath:
+        clean_subpath = subpath.strip("/")
+        path = f"{base_path}/{clean_subpath}" if base_path else f"/{clean_subpath}"
+    else:
+        path = base_path or "/"
+    return url.copy_with(path=path, query=query.encode("utf-8"))
+
+
+def _direct_oauth_url(direct_url: str, endpoint: str, query: str) -> httpx.URL:
+    url = httpx.URL(direct_url)
+    parent = url.path.rstrip("/").rsplit("/", 1)[0]
+    path = f"{parent}/{endpoint}" if parent else f"/{endpoint}"
+    return url.copy_with(path=path, query=query.encode("utf-8"))
 
 
 def _response_headers(incoming: Mapping[str, str]) -> dict[str, str]:
