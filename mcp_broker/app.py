@@ -467,6 +467,7 @@ def create_app(
                 request=request,
                 server=server,
                 endpoint=endpoint,
+                settings=settings,
                 http_client=_http_client(app),
             )
         return await proxy_delegated_litellm_request(

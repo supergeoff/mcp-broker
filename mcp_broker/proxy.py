@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from collections.abc import AsyncIterator
+from urllib.parse import parse_qsl, urlencode
 
 import httpx
 from fastapi import HTTPException, Request
@@ -158,15 +159,26 @@ async def proxy_direct_oauth_endpoint_request(
     request: Request,
     server: McpServerConfiguration,
     endpoint: str,
+    settings: Settings,
     http_client: httpx.AsyncClient,
 ) -> StreamingResponse:
     if not server.direct_url:
         raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
+    body = await request.body()
     upstream_request = http_client.build_request(
         request.method,
-        _direct_oauth_url(server.direct_url, endpoint, request.url.query),
+        _direct_oauth_url(
+            server.direct_url,
+            endpoint,
+            _rewrite_direct_oauth_resource_params(request.url.query, settings, server),
+        ),
         headers=_direct_upstream_headers(request.headers, server),
-        content=await request.body(),
+        content=_rewrite_direct_oauth_form_body(
+            body,
+            request.headers.get("content-type"),
+            settings,
+            server,
+        ),
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
     return StreamingResponse(
@@ -305,6 +317,50 @@ def _direct_oauth_url(direct_url: str, endpoint: str, query: str) -> httpx.URL:
     parent = url.path.rstrip("/").rsplit("/", 1)[0]
     path = f"{parent}/{endpoint}" if parent else f"/{endpoint}"
     return url.copy_with(path=path, query=query.encode("utf-8"))
+
+
+def _rewrite_direct_oauth_form_body(
+    body: bytes,
+    content_type: str | None,
+    settings: Settings,
+    server: McpServerConfiguration,
+) -> bytes:
+    if not body or not _is_form_urlencoded(content_type):
+        return body
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return body
+    rewritten = _rewrite_direct_oauth_resource_params(text, settings, server)
+    return rewritten.encode("utf-8") if rewritten != text else body
+
+
+def _is_form_urlencoded(content_type: str | None) -> bool:
+    if not content_type:
+        return False
+    return content_type.split(";", 1)[0].strip().lower() == "application/x-www-form-urlencoded"
+
+
+def _rewrite_direct_oauth_resource_params(
+    encoded: str,
+    settings: Settings,
+    server: McpServerConfiguration,
+) -> str:
+    if not encoded or not server.direct_url:
+        return encoded
+
+    public_resource = f"{settings.public_url}/{server.name}".rstrip("/")
+    upstream_resource = server.direct_url.rstrip("/")
+    changed = False
+    rewritten: list[tuple[str, str]] = []
+    for name, value in parse_qsl(encoded, keep_blank_values=True):
+        if name == "resource" and value.rstrip("/") == public_resource:
+            rewritten.append((name, upstream_resource))
+            changed = True
+        else:
+            rewritten.append((name, value))
+
+    return urlencode(rewritten) if changed else encoded
 
 
 def _direct_metadata_url(direct_url: str, metadata_kind: str, query: str) -> httpx.URL:

@@ -515,7 +515,8 @@ async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(setti
         follow_redirects=False,
     ) as client:
         authorize_response = await client.get(
-            "/googlemcp/authorize?client_id=standard-mcp-client",
+            "/googlemcp/authorize?client_id=standard-mcp-client"
+            "&resource=https%3A%2F%2Fbroker.example.com%2Fgooglemcp",
             headers={
                 "Origin": "https://broker.example.com",
                 "Referer": "https://broker.example.com/googlemcp",
@@ -528,7 +529,10 @@ async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(setti
                 "Origin": "https://broker.example.com",
                 "Referer": "https://broker.example.com/googlemcp",
             },
-            content=b"grant_type=authorization_code&code=abc",
+            content=(
+                b"grant_type=authorization_code&code=abc"
+                b"&resource=https%3A%2F%2Fbroker.example.com%2Fgooglemcp"
+            ),
         )
 
     assert authorize_response.status_code == 302
@@ -536,10 +540,15 @@ async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(setti
     assert token_response.status_code == 200
     assert captured[0][0] == "GET"
     assert captured[0][1] == "/authorize"
-    assert captured[0][2] == "client_id=standard-mcp-client"
+    assert captured[0][2] == (
+        "client_id=standard-mcp-client&resource=https%3A%2F%2Fgooglemcp.example.com%2Fmcp"
+    )
     assert captured[1][0] == "POST"
     assert captured[1][1] == "/token"
-    assert captured[1][3] == b"grant_type=authorization_code&code=abc"
+    assert captured[1][3] == (
+        b"grant_type=authorization_code&code=abc"
+        b"&resource=https%3A%2F%2Fgooglemcp.example.com%2Fmcp"
+    )
     assert captured[0][4]["origin"] == "https://googlemcp.example.com"
     assert captured[1][4]["origin"] == "https://googlemcp.example.com"
     assert "referer" not in captured[0][4]
