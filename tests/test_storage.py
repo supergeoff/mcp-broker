@@ -112,3 +112,133 @@ async def test_vault_repository_upserts_discovered_mcp_server_configuration(encr
     ]
 
     await engine.dispose()
+
+
+async def test_vault_repository_persists_direct_mcp_server_configuration(encryption_key) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    repository = VaultRepository(session_factory, FernetCipher(encryption_key))
+
+    await repository.upsert_direct_mcp_server(
+        McpServerConfiguration(
+            name="googlemcp",
+            required_headers=("X-GOOGLE-WORKSPACE",),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp/",
+        )
+    )
+
+    assert await repository.get_mcp_server("googlemcp") == McpServerConfiguration(
+        name="googlemcp",
+        required_headers=("X-GOOGLE-WORKSPACE",),
+        delegated_auth_passthrough=True,
+        auth_type="oauth2",
+        source="direct",
+        direct_url="https://googlemcp.example.com/mcp",
+    )
+    assert await repository.list_mcp_servers() == [
+        McpServerConfiguration(
+            name="googlemcp",
+            required_headers=("X-GOOGLE-WORKSPACE",),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp",
+        )
+    ]
+
+    await engine.dispose()
+
+
+async def test_vault_repository_does_not_overwrite_direct_server_with_litellm_discovery(encryption_key) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    repository = VaultRepository(session_factory, FernetCipher(encryption_key))
+
+    await repository.upsert_direct_mcp_server(
+        McpServerConfiguration(
+            name="googlemcp",
+            required_headers=(),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp",
+        )
+    )
+    await repository.upsert_mcp_servers(
+        [
+            McpServerConfiguration(
+                name="googlemcp",
+                required_headers=("X-LITELLM-HEADER",),
+                delegated_auth_passthrough=False,
+                auth_type="bearer_token",
+                source="litellm",
+            )
+        ]
+    )
+
+    assert await repository.get_mcp_server("googlemcp") == McpServerConfiguration(
+        name="googlemcp",
+        required_headers=(),
+        delegated_auth_passthrough=True,
+        auth_type="oauth2",
+        source="direct",
+        direct_url="https://googlemcp.example.com/mcp",
+    )
+
+    await engine.dispose()
+
+
+async def test_vault_repository_deletes_only_direct_mcp_server(encryption_key) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    repository = VaultRepository(session_factory, FernetCipher(encryption_key))
+
+    await repository.upsert_mcp_servers(
+        [
+            McpServerConfiguration(
+                name="context7",
+                required_headers=(),
+                delegated_auth_passthrough=True,
+                auth_type="oauth2",
+                source="litellm",
+            )
+        ]
+    )
+    await repository.upsert_direct_mcp_server(
+        McpServerConfiguration(
+            name="googlemcp",
+            required_headers=(),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp",
+        )
+    )
+
+    await repository.delete_direct_mcp_server("context7")
+    await repository.delete_direct_mcp_server("googlemcp")
+
+    assert await repository.list_mcp_servers() == [
+        McpServerConfiguration(
+            name="context7",
+            required_headers=(),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="litellm",
+            direct_url=None,
+        )
+    ]
+
+    await engine.dispose()

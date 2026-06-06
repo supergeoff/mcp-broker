@@ -9,6 +9,8 @@ from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -49,6 +51,7 @@ def create_app(
             engine = create_async_engine(settings.database_url)
             async with engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
+                await connection.run_sync(_ensure_mcp_server_catalog_columns)
             session_factory = async_sessionmaker(engine, expire_on_commit=False)
             app.state.engine = engine
             app.state.repository = VaultRepository(
@@ -424,3 +427,11 @@ def _repository(app: FastAPI) -> Repository:
 
 def _http_client(app: FastAPI) -> httpx.AsyncClient:
     return app.state.http_client
+
+
+def _ensure_mcp_server_catalog_columns(connection: Connection) -> None:
+    columns = {column["name"] for column in inspect(connection).get_columns("mcp_servers")}
+    if "source" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'litellm'"))
+    if "direct_url" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN direct_url TEXT"))

@@ -94,12 +94,32 @@ class FakeRepository:
 
     async def upsert_mcp_servers(self, servers: list[McpServerConfiguration]) -> None:
         for server in servers:
+            existing = self.mcp_servers.get(server.name)
+            if existing is not None and existing.source == "direct":
+                continue
             self.mcp_servers[server.name] = McpServerConfiguration(
                 name=server.name,
                 required_headers=tuple(sorted(server.required_headers)),
                 delegated_auth_passthrough=server.delegated_auth_passthrough,
                 auth_type=server.auth_type,
+                source="litellm",
+                direct_url=None,
             )
+
+    async def upsert_direct_mcp_server(self, server: McpServerConfiguration) -> None:
+        self.mcp_servers[server.name] = McpServerConfiguration(
+            name=server.name,
+            required_headers=tuple(sorted(server.required_headers)),
+            delegated_auth_passthrough=server.delegated_auth_passthrough,
+            auth_type=server.auth_type,
+            source="direct",
+            direct_url=server.direct_url.rstrip("/") if server.direct_url else None,
+        )
+
+    async def delete_direct_mcp_server(self, mcp_name: str) -> None:
+        existing = self.mcp_servers.get(mcp_name)
+        if existing is not None and existing.source == "direct":
+            self.mcp_servers.pop(mcp_name, None)
 
     async def get_mcp_server(self, mcp_name: str) -> McpServerConfiguration | None:
         return self.mcp_servers.get(mcp_name)
@@ -114,6 +134,8 @@ class FakeRepository:
             required_headers=existing.required_headers if existing else (),
             delegated_auth_passthrough=enabled,
             auth_type=existing.auth_type if existing else None,
+            source=existing.source if existing else "litellm",
+            direct_url=existing.direct_url if existing else None,
         )
 
     async def list_user_states(self) -> list[UserConfigurationState]:
