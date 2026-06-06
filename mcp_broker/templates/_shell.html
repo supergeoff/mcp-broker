@@ -517,6 +517,26 @@
         background: var(--muted);
         color: var(--muted-foreground);
       }
+      .status-oauth-direct,
+      .status-health-healthy {
+        background: var(--success-surface);
+        color: var(--success);
+      }
+      .status-health-unhealthy {
+        background: var(--destructive-surface);
+        color: var(--destructive);
+      }
+      .status-health-unknown {
+        background: var(--muted);
+        color: var(--muted-foreground);
+      }
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: currentColor;
+        flex: 0 0 7px;
+      }
       .badge {
         border: 1px solid var(--border);
         background: var(--muted);
@@ -585,6 +605,16 @@
         margin: 0 0 10px;
         font-size: 15px;
         font-weight: 650;
+      }
+      .server-note {
+        max-width: 720px;
+        margin: 8px 0 0;
+        color: var(--muted-foreground);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .server-health-note {
+        margin-top: 6px;
       }
       .toggle-form {
         flex: 0 0 auto;

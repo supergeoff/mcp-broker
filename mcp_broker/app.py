@@ -18,6 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from mcp_broker.config import Settings
 from mcp_broker.discovery import DiscoveryClient
 from mcp_broker.litellm_health import LiteLLMHealthClient
+from mcp_broker.mcp_health import McpToolHealth, McpToolsHealthClient, health_unknown
 from mcp_broker.models import Base
 from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
@@ -205,6 +206,7 @@ def create_app(
         }
         email = str(user.get("email") or "").lower()
         is_admin = email in settings.admin_emails
+        mcp_health = await _mcp_tool_health_statuses(app, settings, user["sub"], active_servers)
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
@@ -215,6 +217,7 @@ def create_app(
                 "secrets": secrets,
                 "servers": active_servers,
                 "retired_servers": retired_servers,
+                "mcp_health": mcp_health,
                 "current_page": "dashboard",
                 "is_admin": is_admin,
             },
@@ -247,6 +250,7 @@ def create_app(
             if server.source == MCP_SOURCE_DIRECT and server.active
         ]
         servers = sorted([*servers, *direct_servers], key=lambda server: server.name)
+        mcp_health = await _mcp_tool_health_statuses(app, settings, user["sub"], servers)
         email = str(user.get("email") or "").lower()
         return templates.TemplateResponse(
             request=request,
@@ -255,6 +259,7 @@ def create_app(
                 "request": request,
                 "servers": servers,
                 "secrets": await repository.list_secret_headers(user["sub"]),
+                "mcp_health": mcp_health,
                 "is_admin": email in settings.admin_emails,
             },
         )
@@ -572,6 +577,25 @@ def _repository(app: FastAPI) -> Repository:
 
 def _http_client(app: FastAPI) -> httpx.AsyncClient:
     return app.state.http_client
+
+
+async def _mcp_tool_health_statuses(
+    app: FastAPI,
+    settings: Settings,
+    user_sub: str,
+    servers: list[Any],
+) -> dict[str, McpToolHealth]:
+    http_client = getattr(app.state, "http_client", None)
+    if http_client is None:
+        return {
+            server.name: health_unknown("Health check unavailable until the broker HTTP client is ready.")
+            for server in servers
+        }
+    return await McpToolsHealthClient(settings, http_client).check_servers(
+        user_sub=user_sub,
+        repository=_repository(app),
+        servers=servers,
+    )
 
 
 def _ensure_mcp_server_catalog_columns(connection: Connection) -> None:

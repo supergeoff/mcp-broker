@@ -391,7 +391,56 @@ async def test_dashboard_renders_direct_mcp_in_catalog(settings, fake_repository
     assert response.status_code == 200
     assert "googlemcp" in response.text
     assert "Direct" in response.text
-    assert "Upstream OAuth passthrough" in response.text
+    assert "OAuth direct" in response.text
+    assert "No client ID or client secret needed in Claude or OpenWebUI." in response.text
+    assert "Health unknown" in response.text
+
+
+async def test_dashboard_renders_mcp_tools_health_from_listed_tools(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "dokploy": McpServerConfiguration(
+            name="dokploy",
+            required_headers=("X-DOKPLOY_API_KEY",),
+            delegated_auth_passthrough=False,
+            source="litellm",
+        )
+    }
+    fake_repository.secrets = {"dokploy": {"X-DOKPLOY_API_KEY": "dokploy-key"}}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads((await request.aread()).decode("utf-8"))
+        if body["method"] == "tools/list":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {"tools": [{"name": "dokploy.deploy"}]},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": body.get("id"), "result": {}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        app = create_app(settings=settings, repository=fake_repository, http_client=http_client)
+        cookie = _session_cookie(
+            settings.session_secret,
+            {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+        )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://testserver",
+        ) as client:
+            client.cookies.set("session", cookie)
+            response = await client.get("/")
+
+    assert response.status_code == 200
+    assert "dokploy" in response.text
+    assert "Tools healthy" in response.text
+    assert "1 tool listed by tools/list." in response.text
 
 
 async def test_dashboard_hides_saved_headers_for_servers_not_in_catalog(settings, fake_repository) -> None:

@@ -1,6 +1,7 @@
 {% from "_secret_input.html" import secret_input %}
 {% if servers %}
   {% for server in servers %}
+    {% set health = (mcp_health|default({})).get(server.name) %}
     <div class="server-card">
       <div class="server-card-header">
         <div>
@@ -15,11 +16,26 @@
               <span class="badge">{{ server.auth_type }}</span>
             {% endif %}
             {% if server.delegated_auth_passthrough %}
-              <span class="status-badge status-saved">Upstream OAuth passthrough</span>
+              <span class="status-badge status-oauth-direct">
+                <span class="status-dot" aria-hidden="true"></span>
+                OAuth direct
+              </span>
             {% else %}
               <span class="status-badge status-missing">Broker auth</span>
             {% endif %}
+            {% if health %}
+              <span class="status-badge status-health-{{ health.state }}" title="{{ health.detail }}">
+                <span class="status-dot" aria-hidden="true"></span>
+                {{ health.label }}
+              </span>
+            {% endif %}
           </div>
+          {% if server.delegated_auth_passthrough %}
+            <p class="server-note">No client ID or client secret needed in Claude or OpenWebUI. This MCP sends the client through its own OAuth flow.</p>
+          {% endif %}
+          {% if health and health.detail %}
+            <p class="server-note server-health-note">{{ health.detail }}</p>
+          {% endif %}
         </div>
         <form class="toggle-form" method="post" action="/api/mcp/delegated-auth">
           <input type="hidden" name="mcp_name" value="{{ server.name }}">
