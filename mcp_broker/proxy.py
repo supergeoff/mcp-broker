@@ -24,6 +24,7 @@ HOP_BY_HOP_HEADERS = {
 }
 REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"authorization", "content-length", "host"}
 DELEGATED_REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "host", "x-litellm-api-key"}
+DIRECT_LITELLM_SECRET_BLOCKLIST = REQUEST_BLOCKLIST | {"x-litellm-api-key"}
 RESPONSE_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "set-cookie"}
 
 
@@ -255,10 +256,16 @@ def _upstream_headers(
 
 
 def _litellm_mcp_secret_headers(mcp_name: str, secrets: Mapping[str, str]) -> dict[str, str]:
-    return {
+    headers = {
+        header_name: value
+        for header_name, value in secrets.items()
+        if header_name.lower() not in DIRECT_LITELLM_SECRET_BLOCKLIST
+    }
+    headers.update({
         f"x-mcp-{mcp_name}-{header_name.lower()}": value
         for header_name, value in secrets.items()
-    }
+    })
+    return headers
 
 
 def _direct_broker_upstream_headers(

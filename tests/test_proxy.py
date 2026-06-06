@@ -51,8 +51,8 @@ async def test_proxy_injects_user_headers_and_removes_oauth_authorization(settin
     assert captured["query"] == "stream=true"
     assert captured["body"] == b'{"jsonrpc":"2.0"}'
     assert captured["headers"]["x-litellm-api-key"] == "Bearer litellm-user-key"
+    assert captured["headers"]["x-dokploy-token"] == "dokploy-user-token"
     assert captured["headers"]["x-mcp-dokploy-x-dokploy-token"] == "dokploy-user-token"
-    assert "x-dokploy-token" not in captured["headers"]
     assert "authorization" not in captured["headers"]
 
 
@@ -91,10 +91,10 @@ async def test_named_mcp_route_targets_litellm_server_mcp_and_scopes_headers(set
 
     assert response.status_code == 200
     assert captured["path"] == "/dokploy/mcp"
+    assert captured["headers"]["x-dokploy_url"] == "https://dokploy.example.com"
+    assert captured["headers"]["x-dokploy_api_key"] == "dokploy-key"
     assert captured["headers"]["x-mcp-dokploy-x-dokploy_url"] == "https://dokploy.example.com"
     assert captured["headers"]["x-mcp-dokploy-x-dokploy_api_key"] == "dokploy-key"
-    assert "x-dokploy_url" not in captured["headers"]
-    assert "x-dokploy_api_key" not in captured["headers"]
     assert "x-context7-api-key" not in captured["headers"]
     assert "x-mcp-context7-x-context7-api-key" not in captured["headers"]
 
@@ -134,8 +134,8 @@ async def test_litellm_proxy_maps_saved_authorization_to_server_specific_mcp_hea
     assert captured["headers"]["x-litellm-api-key"] == "Bearer litellm-user-key"
     assert captured["headers"]["x-mcp-gworkspace-authorization"] == "Bearer upstream-google-token"
     assert captured["headers"]["x-mcp-gworkspace-x-api-key"] == "workspace-api-key"
+    assert captured["headers"]["x-api-key"] == "workspace-api-key"
     assert "authorization" not in captured["headers"]
-    assert "x-api-key" not in captured["headers"]
 
 
 async def test_named_mcp_subpath_routes_under_litellm_server_mcp(settings) -> None:
