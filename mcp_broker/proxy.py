@@ -1,3 +1,5 @@
+import json
+import logging
 from collections.abc import Mapping
 from collections.abc import AsyncIterator
 from urllib.parse import parse_qsl, urlencode
@@ -24,8 +26,9 @@ HOP_BY_HOP_HEADERS = {
 }
 REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"authorization", "content-length", "host"}
 DELEGATED_REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "host", "x-litellm-api-key"}
-DIRECT_LITELLM_SECRET_BLOCKLIST = REQUEST_BLOCKLIST | {"x-litellm-api-key"}
+DIRECT_LITELLM_SECRET_BLOCKLIST = (REQUEST_BLOCKLIST - {"authorization"}) | {"x-litellm-api-key"}
 RESPONSE_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "set-cookie"}
+logger = logging.getLogger(__name__)
 
 
 async def proxy_mcp_request(
@@ -46,14 +49,23 @@ async def proxy_mcp_request(
         )
 
     secrets = await repository.get_secrets(user_sub, mcp_name)
+    body = await request.body()
+    upstream_headers = _upstream_headers(request.headers, mcp_name, litellm_key, secrets)
     url = _upstream_url(settings, mcp_name, subpath, request.url.query)
     upstream_request = http_client.build_request(
         request.method,
         url,
-        headers=_upstream_headers(request.headers, mcp_name, litellm_key, secrets),
-        content=await request.body(),
+        headers=upstream_headers,
+        content=body,
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
+    _log_litellm_mcp_request(
+        mcp_name=mcp_name,
+        body=body,
+        status_code=upstream_response.status_code,
+        saved_secret_headers=secrets.keys(),
+        injected_secret_headers=_litellm_mcp_secret_headers(mcp_name, secrets).keys(),
+    )
 
     return StreamingResponse(
         _response_body(upstream_response),
@@ -459,3 +471,66 @@ def _rewrite_direct_metadata_string(value: str, settings: Settings, server: McpS
 def _url_origin(url: httpx.URL) -> str:
     port = f":{url.port}" if url.port is not None else ""
     return f"{url.scheme}://{url.host}{port}"
+
+
+def _log_litellm_mcp_request(
+    *,
+    mcp_name: str,
+    body: bytes,
+    status_code: int,
+    saved_secret_headers: object,
+    injected_secret_headers: object,
+) -> None:
+    method, tool_name = _mcp_request_info(body)
+    log = logger.warning if status_code >= 400 else logger.info
+    log(
+        "MCP upstream request mcp=%s method=%s tool=%s upstream=litellm upstream_status=%s "
+        "saved_secret_headers=%s injected_secret_headers=%s",
+        mcp_name,
+        method,
+        tool_name,
+        status_code,
+        _safe_header_names(saved_secret_headers),
+        _safe_header_names(injected_secret_headers),
+    )
+
+
+def _mcp_request_info(body: bytes) -> tuple[str, str]:
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return "-", "-"
+    return _jsonrpc_method(payload), _jsonrpc_tool_name(payload)
+
+
+def _jsonrpc_method(payload: object) -> str:
+    if isinstance(payload, dict):
+        method = payload.get("method")
+        return str(method)[:80] if method else "-"
+    if isinstance(payload, list):
+        methods = [_jsonrpc_method(item) for item in payload]
+        methods = [method for method in methods if method != "-"]
+        return ",".join(methods[:3]) if methods else "-"
+    return "-"
+
+
+def _jsonrpc_tool_name(payload: object) -> str:
+    if isinstance(payload, dict):
+        if payload.get("method") != "tools/call":
+            return "-"
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            return "-"
+        name = params.get("name")
+        return str(name)[:120] if name else "-"
+    if isinstance(payload, list):
+        names = [_jsonrpc_tool_name(item) for item in payload]
+        names = [name for name in names if name != "-"]
+        return ",".join(names[:3]) if names else "-"
+    return "-"
+
+
+def _safe_header_names(header_names: object) -> tuple[str, ...]:
+    if not isinstance(header_names, Mapping) and not hasattr(header_names, "__iter__"):
+        return ()
+    return tuple(sorted(str(name) for name in header_names))

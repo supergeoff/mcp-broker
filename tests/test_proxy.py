@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 import pytest
 
@@ -99,7 +101,7 @@ async def test_named_mcp_route_targets_litellm_server_mcp_and_scopes_headers(set
     assert "x-mcp-context7-x-context7-api-key" not in captured["headers"]
 
 
-async def test_litellm_proxy_maps_saved_authorization_to_server_specific_mcp_header(settings) -> None:
+async def test_litellm_proxy_forwards_saved_authorization_without_leaking_oauth_authorization(settings) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -132,10 +134,50 @@ async def test_litellm_proxy_maps_saved_authorization_to_server_specific_mcp_hea
 
     assert response.status_code == 200
     assert captured["headers"]["x-litellm-api-key"] == "Bearer litellm-user-key"
+    assert captured["headers"]["authorization"] == "Bearer upstream-google-token"
     assert captured["headers"]["x-mcp-gworkspace-authorization"] == "Bearer upstream-google-token"
     assert captured["headers"]["x-mcp-gworkspace-x-api-key"] == "workspace-api-key"
     assert captured["headers"]["x-api-key"] == "workspace-api-key"
-    assert "authorization" not in captured["headers"]
+
+
+async def test_litellm_proxy_logs_secret_header_names_without_values_on_auth_failure(settings, caplog) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "unauthorized"})
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            secrets={
+                "openwebui": {
+                    "Authorization": "Bearer upstream-openwebui-token",
+                    "X-OpenWebUI-API-Key": "openwebui-secret",
+                }
+            }
+        ),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    caplog.set_level(logging.INFO, logger="mcp_broker.proxy")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/openwebui",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}},
+        )
+
+    assert response.status_code == 401
+    assert "mcp=openwebui" in caplog.text
+    assert "method=tools/call" in caplog.text
+    assert "upstream_status=401" in caplog.text
+    assert "Authorization" in caplog.text
+    assert "X-OpenWebUI-API-Key" in caplog.text
+    assert "upstream-openwebui-token" not in caplog.text
+    assert "openwebui-secret" not in caplog.text
+    assert "oauth-access-token" not in caplog.text
 
 
 async def test_named_mcp_subpath_routes_under_litellm_server_mcp(settings) -> None:
