@@ -42,4 +42,73 @@
       </tbody>
     </table>
   </section>
+
+  <section class="card" style="margin-top: 16px;">
+    <div class="card-header">
+      <div>
+        <h2 class="card-title">Direct MCP servers</h2>
+        <p class="card-description">Add MCP endpoints that should bypass LiteLLM.</p>
+      </div>
+    </div>
+    <form class="form-grid" method="post" action="/api/mcp/direct">
+      <div class="field">
+        <label for="direct-mcp-name">Name</label>
+        <input id="direct-mcp-name" name="name" autocomplete="off" placeholder="googlemcp" required>
+      </div>
+      <div class="field">
+        <label for="direct-mcp-url">Direct MCP URL</label>
+        <input id="direct-mcp-url" name="direct_url" autocomplete="off" placeholder="https://googlemcp.supergeoff.top/mcp" required>
+      </div>
+      <div class="field">
+        <label for="direct-mcp-auth-mode">Auth mode</label>
+        <select id="direct-mcp-auth-mode" name="auth_mode">
+          <option value="passthrough">Upstream OAuth passthrough</option>
+          <option value="broker">Broker auth</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="direct-mcp-auth-type">Auth type</label>
+        <input id="direct-mcp-auth-type" name="auth_type" autocomplete="off" placeholder="oauth2">
+      </div>
+      <div class="field">
+        <label for="direct-mcp-headers">Required headers</label>
+        <input id="direct-mcp-headers" name="required_headers" autocomplete="off" placeholder="X-API-KEY, X-ORG-ID">
+      </div>
+      <div class="actions">
+        <button class="button button-primary" type="submit">Add direct MCP</button>
+      </div>
+    </form>
+
+    {% if direct_servers %}
+      <div class="server-list" style="margin-top: 16px;">
+        {% for server in direct_servers %}
+          <div class="server-card">
+            <div class="server-card-header">
+              <div>
+                <h3 class="server-title">{{ server.name }}</h3>
+                <div class="badge-list">
+                  <span class="badge">Direct</span>
+                  {% if server.auth_type %}
+                    <span class="badge">{{ server.auth_type }}</span>
+                  {% endif %}
+                  {% if server.delegated_auth_passthrough %}
+                    <span class="status-badge status-saved">Upstream OAuth passthrough</span>
+                  {% else %}
+                    <span class="status-badge status-missing">Broker auth</span>
+                  {% endif %}
+                </div>
+                <p class="card-description">{{ server.direct_url }}</p>
+              </div>
+              <form method="post" action="/api/mcp/direct/delete">
+                <input type="hidden" name="name" value="{{ server.name }}">
+                <button class="button button-danger button-small" type="submit">Delete</button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state" style="margin-top: 16px;">No direct MCP servers configured.</div>
+    {% endif %}
+  </section>
 {% endblock %}

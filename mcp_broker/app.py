@@ -3,12 +3,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -17,10 +20,12 @@ from mcp_broker.discovery import DiscoveryClient
 from mcp_broker.models import Base
 from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
+from mcp_broker.proxy import proxy_direct_broker_mcp_request, proxy_direct_oauth_endpoint_request
+from mcp_broker.proxy import proxy_direct_oauth_metadata_request, proxy_direct_passthrough_mcp_request
 from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
 from mcp_broker.secret_headers import is_valid_secret_header_name, normalize_secret_header_name
-from mcp_broker.storage import McpServerConfiguration, Repository, VaultRepository
+from mcp_broker.storage import MCP_SOURCE_DIRECT, McpServerConfiguration, Repository, VaultRepository
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -49,6 +54,7 @@ def create_app(
             engine = create_async_engine(settings.database_url)
             async with engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
+                await connection.run_sync(_ensure_mcp_server_catalog_columns)
             session_factory = async_sessionmaker(engine, expire_on_commit=False)
             app.state.engine = engine
             app.state.repository = VaultRepository(
@@ -110,7 +116,16 @@ def create_app(
     @app.get("/.well-known/oauth-protected-resource/{mcp_name}")
     async def named_protected_resource_metadata(request: Request, mcp_name: str):
         normalized_mcp_name = _normalize_mcp_name(mcp_name)
-        if await _is_delegated_mcp(app, normalized_mcp_name):
+        server = await _repository(app).get_mcp_server(normalized_mcp_name)
+        if server and server.delegated_auth_passthrough:
+            if server.source == MCP_SOURCE_DIRECT:
+                return await proxy_direct_oauth_metadata_request(
+                    request=request,
+                    server=server,
+                    metadata_kind="oauth-protected-resource",
+                    settings=settings,
+                    http_client=_http_client(app),
+                )
             return await proxy_delegated_oauth_metadata_request(
                 request=request,
                 mcp_name=normalized_mcp_name,
@@ -123,8 +138,17 @@ def create_app(
     @app.get("/.well-known/oauth-authorization-server/{mcp_name}")
     async def named_authorization_server_metadata(request: Request, mcp_name: str):
         normalized_mcp_name = _normalize_mcp_name(mcp_name)
-        if not await _is_delegated_mcp(app, normalized_mcp_name):
+        server = await _repository(app).get_mcp_server(normalized_mcp_name)
+        if not server or not server.delegated_auth_passthrough:
             raise HTTPException(status_code=404, detail="MCP server not found")
+        if server.source == MCP_SOURCE_DIRECT:
+            return await proxy_direct_oauth_metadata_request(
+                request=request,
+                server=server,
+                metadata_kind="oauth-authorization-server",
+                settings=settings,
+                http_client=_http_client(app),
+            )
         return await proxy_delegated_oauth_metadata_request(
             request=request,
             mcp_name=normalized_mcp_name,
@@ -169,10 +193,15 @@ def create_app(
             return RedirectResponse("/auth/login")
         repository = _repository(app)
         litellm_key_saved = await repository.get_litellm_key(user["sub"]) is not None
-        secrets = await repository.list_secret_headers(user["sub"])
+        mcp_servers = await repository.list_mcp_servers()
+        catalog_names = {server.name for server in mcp_servers}
+        secrets = {
+            mcp_name: header_names
+            for mcp_name, header_names in (await repository.list_secret_headers(user["sub"])).items()
+            if mcp_name in catalog_names
+        }
         email = str(user.get("email") or "").lower()
         is_admin = email in settings.admin_emails
-        mcp_servers = await repository.list_mcp_servers()
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
@@ -268,7 +297,9 @@ def create_app(
         email = str(user.get("email") or "").lower()
         if email not in settings.admin_emails:
             raise HTTPException(status_code=403, detail="Admin only")
-        states = await _repository(app).list_user_states()
+        repository = _repository(app)
+        states = await repository.list_user_states()
+        direct_servers = [server for server in await repository.list_mcp_servers() if server.source == MCP_SOURCE_DIRECT]
         return templates.TemplateResponse(
             request=request,
             name="admin.html",
@@ -276,10 +307,46 @@ def create_app(
                 "request": request,
                 "user": user,
                 "states": states,
+                "direct_servers": direct_servers,
                 "current_page": "admin",
                 "is_admin": True,
             },
         )
+
+    @app.post("/api/mcp/direct")
+    async def save_direct_mcp(request: Request):
+        user = _require_session_user(request)
+        if not _is_admin_user(user, settings):
+            raise HTTPException(status_code=403, detail="Admin only")
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("name", "")).strip())
+        direct_url = _normalize_direct_url(str(form.get("direct_url", "")).strip())
+        auth_mode = str(form.get("auth_mode", "broker")).strip().lower()
+        if auth_mode not in {"broker", "passthrough"}:
+            raise HTTPException(status_code=400, detail="Auth mode must be broker or passthrough")
+        required_headers = _parse_required_headers(str(form.get("required_headers", "")))
+        auth_type = str(form.get("auth_type", "")).strip() or None
+        await _repository(app).upsert_direct_mcp_server(
+            McpServerConfiguration(
+                name=mcp_name,
+                required_headers=required_headers,
+                delegated_auth_passthrough=auth_mode == "passthrough",
+                auth_type=auth_type,
+                source=MCP_SOURCE_DIRECT,
+                direct_url=direct_url,
+            )
+        )
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/api/mcp/direct/delete")
+    async def delete_direct_mcp(request: Request):
+        user = _require_session_user(request)
+        if not _is_admin_user(user, settings):
+            raise HTTPException(status_code=403, detail="Admin only")
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("name", "")).strip())
+        await _repository(app).delete_direct_mcp_server(mcp_name)
+        return RedirectResponse("/admin", status_code=303)
 
     @app.api_route("/{mcp_name}/authorize", methods=["GET"])
     async def delegated_authorize(request: Request, mcp_name: str):
@@ -302,7 +369,15 @@ def create_app(
         return await _handle_mcp(request, _normalize_mcp_name(mcp_name), subpath)
 
     async def _handle_mcp(request: Request, mcp_name: str, subpath: str):
-        if await _is_delegated_mcp(app, mcp_name):
+        server = await _repository(app).get_mcp_server(mcp_name)
+        if server and server.delegated_auth_passthrough:
+            if server.source == MCP_SOURCE_DIRECT:
+                return await proxy_direct_passthrough_mcp_request(
+                    request=request,
+                    server=server,
+                    subpath=subpath,
+                    http_client=_http_client(app),
+                )
             return await proxy_delegated_mcp_request(
                 request=request,
                 mcp_name=mcp_name,
@@ -322,6 +397,15 @@ def create_app(
         await _repository(app).upsert_user(claims["sub"], claims.get("email"))
         if not app.state.rate_limiter.allow(claims["sub"]):
             raise HTTPException(status_code=429, detail="Too many MCP requests. Try again later.")
+        if server and server.source == MCP_SOURCE_DIRECT:
+            return await proxy_direct_broker_mcp_request(
+                request=request,
+                server=server,
+                subpath=subpath,
+                user_sub=claims["sub"],
+                repository=_repository(app),
+                http_client=_http_client(app),
+            )
         return await proxy_mcp_request(
             request=request,
             mcp_name=mcp_name,
@@ -333,8 +417,16 @@ def create_app(
         )
 
     async def _handle_delegated_oauth_endpoint(request: Request, mcp_name: str, endpoint: str):
-        if not await _is_delegated_mcp(app, mcp_name):
+        server = await _repository(app).get_mcp_server(mcp_name)
+        if not server or not server.delegated_auth_passthrough:
             return await _handle_mcp(request, mcp_name, endpoint)
+        if server.source == MCP_SOURCE_DIRECT:
+            return await proxy_direct_oauth_endpoint_request(
+                request=request,
+                server=server,
+                endpoint=endpoint,
+                http_client=_http_client(app),
+            )
         return await proxy_delegated_litellm_request(
             request=request,
             path=f"/{mcp_name}/{endpoint}",
@@ -369,11 +461,6 @@ def _mcp_server_configurations(servers: list[Any]) -> list[McpServerConfiguratio
     ]
 
 
-async def _is_delegated_mcp(app: FastAPI, mcp_name: str) -> bool:
-    server = await _repository(app).get_mcp_server(mcp_name)
-    return bool(server and server.delegated_auth_passthrough)
-
-
 def _is_admin_user(user: Mapping[str, str], settings: Settings) -> bool:
     return str(user.get("email") or "").lower() in settings.admin_emails
 
@@ -406,6 +493,24 @@ def _normalize_mcp_name(value: str) -> str:
     return normalized
 
 
+def _normalize_direct_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Direct MCP URL must be an absolute http or https URL")
+    if parsed.query or parsed.fragment:
+        raise HTTPException(status_code=400, detail="Direct MCP URL must not include query strings or fragments")
+    return value.rstrip("/")
+
+
+def _parse_required_headers(value: str) -> tuple[str, ...]:
+    headers = tuple(normalize_secret_header_name(header) for header in value.split(","))
+    required_headers = tuple(header for header in headers if header)
+    invalid = [header for header in required_headers if not is_valid_secret_header_name(header)]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid required header: {invalid[0]}")
+    return tuple(sorted(set(required_headers)))
+
+
 def _session_user(request: Request) -> dict[str, str] | None:
     user = request.session.get("user")
     return user if isinstance(user, dict) and "sub" in user else None
@@ -424,3 +529,11 @@ def _repository(app: FastAPI) -> Repository:
 
 def _http_client(app: FastAPI) -> httpx.AsyncClient:
     return app.state.http_client
+
+
+def _ensure_mcp_server_catalog_columns(connection: Connection) -> None:
+    columns = {column["name"] for column in inspect(connection).get_columns("mcp_servers")}
+    if "source" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'litellm'"))
+    if "direct_url" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN direct_url TEXT"))

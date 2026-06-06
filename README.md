@@ -10,6 +10,7 @@ This repository intentionally contains no runtime secrets. Configure deployments
 - Pocket ID JWT validation through JWKS.
 - Per-user encrypted LiteLLM key and per-MCP secret header vault.
 - Dynamic LiteLLM MCP discovery using admin catalog access plus user-key filtering.
+- Admin-managed direct MCP catalog entries that can bypass LiteLLM when an upstream MCP server needs to own its OAuth flow.
 - Streaming reverse proxy from `/{server}` to the LiteLLM `/{server}/mcp` endpoint with `Authorization` stripped and only user headers for that server injected.
 - Delegated upstream OAuth passthrough for LiteLLM MCP servers that manage their own OAuth.
 - In-memory per-user MCP request rate limit for mono-replica deployments.
@@ -33,6 +34,20 @@ MCP client URLs are one per LiteLLM MCP server:
 https://your-broker-domain.example/dokploy
 https://your-broker-domain.example/context7
 ```
+
+Admins can also add direct MCP entries from `/admin`. A direct entry still uses the broker URL publicly:
+
+```text
+https://your-broker-domain.example/googlemcp
+```
+
+but can proxy directly to an upstream endpoint such as:
+
+```text
+https://googlemcp.supergeoff.top/mcp
+```
+
+Use upstream OAuth passthrough for direct servers that run their own OAuth proxy, such as FastMCP Google Workspace servers. In that mode the broker keeps the catalog entry and public URL, but OAuth endpoints and MCP traffic bypass LiteLLM.
 
 `EXPECTED_AUDIENCE` accepts one or more comma-separated audiences. Include the audience that Pocket ID puts in access tokens for your MCP clients, for example a shared broker client ID and, if your IdP supports resource indicators, resource URLs:
 

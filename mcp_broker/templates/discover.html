@@ -6,11 +6,16 @@
         <div>
           <h3 class="server-title">{{ server.name }}</h3>
           <div class="badge-list">
+            {% if server.source == "direct" %}
+              <span class="badge">Direct</span>
+            {% else %}
+              <span class="badge">LiteLLM</span>
+            {% endif %}
             {% if server.auth_type %}
               <span class="badge">{{ server.auth_type }}</span>
             {% endif %}
             {% if server.delegated_auth_passthrough %}
-              <span class="status-badge status-saved">PKCE passthrough</span>
+              <span class="status-badge status-saved">Upstream OAuth passthrough</span>
             {% else %}
               <span class="status-badge status-missing">Broker auth</span>
             {% endif %}

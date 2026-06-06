@@ -18,6 +18,8 @@ class Repository(Protocol):
     async def get_secrets(self, user_sub: str, mcp_name: str) -> dict[str, str]: ...
     async def list_secret_headers(self, user_sub: str) -> dict[str, tuple[str, ...]]: ...
     async def upsert_mcp_servers(self, servers: list["McpServerConfiguration"]) -> None: ...
+    async def upsert_direct_mcp_server(self, server: "McpServerConfiguration") -> None: ...
+    async def delete_direct_mcp_server(self, mcp_name: str) -> None: ...
     async def get_mcp_server(self, mcp_name: str) -> "McpServerConfiguration | None": ...
     async def list_mcp_servers(self) -> list["McpServerConfiguration"]: ...
     async def set_mcp_delegated_auth(self, mcp_name: str, enabled: bool) -> None: ...
@@ -31,12 +33,19 @@ class UserConfigurationState:
     secret_count: int
 
 
+MCP_SOURCE_LITELLM = "litellm"
+MCP_SOURCE_DIRECT = "direct"
+MCP_SOURCES = {MCP_SOURCE_LITELLM, MCP_SOURCE_DIRECT}
+
+
 @dataclass(frozen=True)
 class McpServerConfiguration:
     name: str
     required_headers: tuple[str, ...]
     delegated_auth_passthrough: bool = False
     auth_type: str | None = None
+    source: str = MCP_SOURCE_LITELLM
+    direct_url: str | None = None
 
 
 class VaultRepository:
@@ -154,8 +163,18 @@ class VaultRepository:
     async def upsert_mcp_servers(self, servers: list[McpServerConfiguration]) -> None:
         async with self._session_factory() as session:
             for server in servers:
-                normalized = _normalize_mcp_server_configuration(server)
+                normalized = _normalize_mcp_server_configuration(
+                    McpServerConfiguration(
+                        name=server.name,
+                        required_headers=server.required_headers,
+                        delegated_auth_passthrough=server.delegated_auth_passthrough,
+                        auth_type=server.auth_type,
+                        source=MCP_SOURCE_LITELLM,
+                    )
+                )
                 stored = await session.get(McpServer, normalized.name)
+                if stored is not None and stored.source == MCP_SOURCE_DIRECT:
+                    continue
                 required_headers_json = json.dumps(list(normalized.required_headers))
                 if stored is None:
                     session.add(
@@ -164,12 +183,60 @@ class VaultRepository:
                             required_headers_json=required_headers_json,
                             delegated_auth_passthrough=normalized.delegated_auth_passthrough,
                             auth_type=normalized.auth_type,
+                            source=MCP_SOURCE_LITELLM,
+                            direct_url=None,
                         )
                     )
                 else:
                     stored.required_headers_json = required_headers_json
                     stored.delegated_auth_passthrough = normalized.delegated_auth_passthrough
                     stored.auth_type = normalized.auth_type
+                    stored.source = MCP_SOURCE_LITELLM
+                    stored.direct_url = None
+            await session.commit()
+
+    async def upsert_direct_mcp_server(self, server: McpServerConfiguration) -> None:
+        normalized = _normalize_mcp_server_configuration(
+            McpServerConfiguration(
+                name=server.name,
+                required_headers=server.required_headers,
+                delegated_auth_passthrough=server.delegated_auth_passthrough,
+                auth_type=server.auth_type,
+                source=MCP_SOURCE_DIRECT,
+                direct_url=server.direct_url,
+            )
+        )
+        async with self._session_factory() as session:
+            stored = await session.get(McpServer, normalized.name)
+            required_headers_json = json.dumps(list(normalized.required_headers))
+            if stored is None:
+                session.add(
+                    McpServer(
+                        name=normalized.name,
+                        required_headers_json=required_headers_json,
+                        delegated_auth_passthrough=normalized.delegated_auth_passthrough,
+                        auth_type=normalized.auth_type,
+                        source=normalized.source,
+                        direct_url=normalized.direct_url,
+                    )
+                )
+            else:
+                stored.required_headers_json = required_headers_json
+                stored.delegated_auth_passthrough = normalized.delegated_auth_passthrough
+                stored.auth_type = normalized.auth_type
+                stored.source = normalized.source
+                stored.direct_url = normalized.direct_url
+            await session.commit()
+
+    async def delete_direct_mcp_server(self, mcp_name: str) -> None:
+        normalized_name = mcp_name.strip()
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(McpServer).where(
+                    McpServer.name == normalized_name,
+                    McpServer.source == MCP_SOURCE_DIRECT,
+                )
+            )
             await session.commit()
 
     async def get_mcp_server(self, mcp_name: str) -> McpServerConfiguration | None:
@@ -194,6 +261,8 @@ class VaultRepository:
                         name=normalized_name,
                         required_headers_json="[]",
                         delegated_auth_passthrough=enabled,
+                        source=MCP_SOURCE_LITELLM,
+                        direct_url=None,
                     )
                 )
             else:
@@ -231,11 +300,23 @@ class VaultRepository:
 
 
 def _normalize_mcp_server_configuration(server: McpServerConfiguration) -> McpServerConfiguration:
+    source = server.source.strip().lower() if server.source else MCP_SOURCE_LITELLM
+    if source not in MCP_SOURCES:
+        raise ValueError("MCP server source must be litellm or direct")
+
+    direct_url = server.direct_url.strip().rstrip("/") if server.direct_url else None
+    if source == MCP_SOURCE_DIRECT and not direct_url:
+        raise ValueError("Direct MCP servers require a direct_url")
+    if source == MCP_SOURCE_LITELLM:
+        direct_url = None
+
     return McpServerConfiguration(
         name=server.name.strip(),
         required_headers=tuple(sorted({header.strip() for header in server.required_headers if header.strip()})),
         delegated_auth_passthrough=server.delegated_auth_passthrough,
-        auth_type=server.auth_type,
+        auth_type=server.auth_type.strip() if server.auth_type and server.auth_type.strip() else None,
+        source=source,
+        direct_url=direct_url,
     )
 
 
@@ -249,4 +330,6 @@ def _mcp_server_configuration_from_row(row: McpServer) -> McpServerConfiguration
         required_headers=tuple(sorted(str(header) for header in headers if str(header).strip())),
         delegated_auth_passthrough=row.delegated_auth_passthrough,
         auth_type=row.auth_type,
+        source=row.source or MCP_SOURCE_LITELLM,
+        direct_url=row.direct_url,
     )

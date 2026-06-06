@@ -2,6 +2,8 @@ import httpx
 import pytest
 
 from mcp_broker.app import create_app
+from mcp_broker.storage import McpServerConfiguration
+from tests.conftest import FakeRepository
 
 pytestmark = pytest.mark.anyio
 
@@ -35,6 +37,102 @@ async def test_named_protected_resource_metadata_points_clients_to_pocket_id(set
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["openid", "email", "profile"],
         "resource_documentation": "https://broker.example.com/",
+    }
+
+
+async def test_direct_passthrough_protected_resource_metadata_is_proxied_and_rewritten(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "resource": "https://googlemcp.example.com/mcp",
+                "authorization_servers": [
+                    "https://googlemcp.example.com/.well-known/oauth-authorization-server/mcp"
+                ],
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/.well-known/oauth-protected-resource/googlemcp")
+
+    assert response.status_code == 200
+    assert captured["path"] == "/.well-known/oauth-protected-resource/mcp"
+    assert response.json() == {
+        "resource": "https://broker.example.com/googlemcp",
+        "authorization_servers": [
+            "https://broker.example.com/.well-known/oauth-authorization-server/googlemcp"
+        ],
+    }
+
+
+async def test_direct_passthrough_authorization_server_metadata_is_proxied_and_rewritten(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "issuer": "https://googlemcp.example.com",
+                "authorization_endpoint": "https://googlemcp.example.com/authorize",
+                "token_endpoint": "https://googlemcp.example.com/token",
+                "registration_endpoint": "https://googlemcp.example.com/register",
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/.well-known/oauth-authorization-server/googlemcp")
+
+    assert response.status_code == 200
+    assert captured["path"] == "/.well-known/oauth-authorization-server/mcp"
+    assert response.json() == {
+        "issuer": "https://googlemcp.example.com",
+        "authorization_endpoint": "https://broker.example.com/googlemcp/authorize",
+        "token_endpoint": "https://broker.example.com/googlemcp/token",
+        "registration_endpoint": "https://broker.example.com/googlemcp/register",
     }
 
 

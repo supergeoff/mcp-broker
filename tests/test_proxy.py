@@ -148,6 +148,99 @@ async def test_proxy_returns_412_when_user_vault_is_not_ready(settings) -> None:
     }
 
 
+async def test_direct_broker_auth_mcp_proxies_without_litellm_key(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
+        captured["body"] = await request.aread()
+        return httpx.Response(200, content=b"direct-ok")
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            litellm_key=None,
+            secrets={"googlemcp": {"X-GOOGLE-WORKSPACE": "workspace-token"}},
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=("X-GOOGLE-WORKSPACE",),
+                    delegated_auth_passthrough=False,
+                    auth_type=None,
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            },
+        ),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/googlemcp?stream=true",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            content=b'{"jsonrpc":"2.0"}',
+        )
+
+    assert response.status_code == 200
+    assert response.text == "direct-ok"
+    assert captured["url"] == "https://googlemcp.example.com/mcp?stream=true"
+    assert captured["body"] == b'{"jsonrpc":"2.0"}'
+    assert captured["headers"]["x-google-workspace"] == "workspace-token"
+    assert "authorization" not in captured["headers"]
+    assert "x-litellm-api-key" not in captured["headers"]
+
+
+async def test_direct_passthrough_mcp_preserves_authorization_without_pocket_id(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
+        captured["body"] = await request.aread()
+        return httpx.Response(200, content=b"direct-passthrough-ok")
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            }
+        ),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/googlemcp/events?cursor=abc",
+            headers={"Authorization": "Bearer upstream-token"},
+            content=b"{}",
+        )
+
+    assert response.status_code == 200
+    assert response.text == "direct-passthrough-ok"
+    assert captured["url"] == "https://googlemcp.example.com/mcp/events?cursor=abc"
+    assert captured["body"] == b"{}"
+    assert captured["headers"]["authorization"] == "Bearer upstream-token"
+    assert "x-litellm-api-key" not in captured["headers"]
+
+
 async def test_delegated_auth_mcp_proxies_without_pocket_id_and_preserves_authorization(settings) -> None:
     captured: dict[str, object] = {}
 
@@ -283,3 +376,62 @@ async def test_delegated_auth_oauth_endpoints_proxy_to_litellm_without_litellm_k
     assert captured[1][2] == b"grant_type=authorization_code&code=abc"
     assert "x-litellm-api-key" not in captured[0][3]
     assert "x-litellm-api-key" not in captured[1][3]
+
+
+async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(settings) -> None:
+    captured: list[tuple[str, str, str, bytes, dict[str, str]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            (
+                request.method,
+                request.url.path,
+                request.url.query.decode(),
+                await request.aread(),
+                dict(request.headers),
+            )
+        )
+        if request.url.path == "/authorize":
+            return httpx.Response(302, headers={"location": "https://accounts.google.com/o/oauth2/v2/auth"})
+        return httpx.Response(200, json={"access_token": "upstream-token"})
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        follow_redirects=False,
+    ) as client:
+        authorize_response = await client.get("/googlemcp/authorize?client_id=standard-mcp-client")
+        token_response = await client.post(
+            "/googlemcp/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            content=b"grant_type=authorization_code&code=abc",
+        )
+
+    assert authorize_response.status_code == 302
+    assert authorize_response.headers["location"] == "https://accounts.google.com/o/oauth2/v2/auth"
+    assert token_response.status_code == 200
+    assert captured[0][0] == "GET"
+    assert captured[0][1] == "/authorize"
+    assert captured[0][2] == "client_id=standard-mcp-client"
+    assert captured[1][0] == "POST"
+    assert captured[1][1] == "/token"
+    assert captured[1][3] == b"grant_type=authorization_code&code=abc"
+    assert "x-litellm-api-key" not in captured[0][4]
+    assert "x-litellm-api-key" not in captured[1][4]
