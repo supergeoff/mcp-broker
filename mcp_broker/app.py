@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from authlib.integrations.starlette_client import OAuth
@@ -22,7 +23,7 @@ from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_r
 from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
 from mcp_broker.secret_headers import is_valid_secret_header_name, normalize_secret_header_name
-from mcp_broker.storage import McpServerConfiguration, Repository, VaultRepository
+from mcp_broker.storage import MCP_SOURCE_DIRECT, McpServerConfiguration, Repository, VaultRepository
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -271,7 +272,9 @@ def create_app(
         email = str(user.get("email") or "").lower()
         if email not in settings.admin_emails:
             raise HTTPException(status_code=403, detail="Admin only")
-        states = await _repository(app).list_user_states()
+        repository = _repository(app)
+        states = await repository.list_user_states()
+        direct_servers = [server for server in await repository.list_mcp_servers() if server.source == MCP_SOURCE_DIRECT]
         return templates.TemplateResponse(
             request=request,
             name="admin.html",
@@ -279,10 +282,46 @@ def create_app(
                 "request": request,
                 "user": user,
                 "states": states,
+                "direct_servers": direct_servers,
                 "current_page": "admin",
                 "is_admin": True,
             },
         )
+
+    @app.post("/api/mcp/direct")
+    async def save_direct_mcp(request: Request):
+        user = _require_session_user(request)
+        if not _is_admin_user(user, settings):
+            raise HTTPException(status_code=403, detail="Admin only")
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("name", "")).strip())
+        direct_url = _normalize_direct_url(str(form.get("direct_url", "")).strip())
+        auth_mode = str(form.get("auth_mode", "broker")).strip().lower()
+        if auth_mode not in {"broker", "passthrough"}:
+            raise HTTPException(status_code=400, detail="Auth mode must be broker or passthrough")
+        required_headers = _parse_required_headers(str(form.get("required_headers", "")))
+        auth_type = str(form.get("auth_type", "")).strip() or None
+        await _repository(app).upsert_direct_mcp_server(
+            McpServerConfiguration(
+                name=mcp_name,
+                required_headers=required_headers,
+                delegated_auth_passthrough=auth_mode == "passthrough",
+                auth_type=auth_type,
+                source=MCP_SOURCE_DIRECT,
+                direct_url=direct_url,
+            )
+        )
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/api/mcp/direct/delete")
+    async def delete_direct_mcp(request: Request):
+        user = _require_session_user(request)
+        if not _is_admin_user(user, settings):
+            raise HTTPException(status_code=403, detail="Admin only")
+        form = await request.form()
+        mcp_name = _normalize_mcp_name(str(form.get("name", "")).strip())
+        await _repository(app).delete_direct_mcp_server(mcp_name)
+        return RedirectResponse("/admin", status_code=303)
 
     @app.api_route("/{mcp_name}/authorize", methods=["GET"])
     async def delegated_authorize(request: Request, mcp_name: str):
@@ -407,6 +446,24 @@ def _normalize_mcp_name(value: str) -> str:
     if not MCP_NAME_RE.fullmatch(normalized):
         raise HTTPException(status_code=400, detail="MCP name must use letters, numbers, dot, dash, or underscore")
     return normalized
+
+
+def _normalize_direct_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Direct MCP URL must be an absolute http or https URL")
+    if parsed.query or parsed.fragment:
+        raise HTTPException(status_code=400, detail="Direct MCP URL must not include query strings or fragments")
+    return value.rstrip("/")
+
+
+def _parse_required_headers(value: str) -> tuple[str, ...]:
+    headers = tuple(normalize_secret_header_name(header) for header in value.split(","))
+    required_headers = tuple(header for header in headers if header)
+    invalid = [header for header in required_headers if not is_valid_secret_header_name(header)]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid required header: {invalid[0]}")
+    return tuple(sorted(set(required_headers)))
 
 
 def _session_user(request: Request) -> dict[str, str] | None:

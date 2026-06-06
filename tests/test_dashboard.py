@@ -355,6 +355,137 @@ async def test_admin_uses_dokploy_shell_and_status_badges(settings, fake_reposit
     assert "admin@example.com" in response.text
 
 
+async def test_admin_renders_direct_mcp_form_and_entries(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "googlemcp": McpServerConfiguration(
+            name="googlemcp",
+            required_headers=("X-GOOGLE-WORKSPACE",),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp",
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.get("/admin")
+
+    assert response.status_code == 200
+    assert 'action="/api/mcp/direct"' in response.text
+    assert 'name="name"' in response.text
+    assert 'name="direct_url"' in response.text
+    assert 'name="auth_mode"' in response.text
+    assert "googlemcp" in response.text
+    assert "https://googlemcp.example.com/mcp" in response.text
+    assert 'action="/api/mcp/direct/delete"' in response.text
+
+
+async def test_admin_adds_direct_passthrough_mcp(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/mcp/direct",
+            data={
+                "name": "googlemcp",
+                "direct_url": "https://googlemcp.example.com/mcp/",
+                "auth_mode": "passthrough",
+                "auth_type": "oauth2",
+                "required_headers": "X-GOOGLE-WORKSPACE, X-GOOGLE-ORG",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.mcp_servers["googlemcp"] == McpServerConfiguration(
+        name="googlemcp",
+        required_headers=("X-GOOGLE-ORG", "X-GOOGLE-WORKSPACE"),
+        delegated_auth_passthrough=True,
+        auth_type="oauth2",
+        source="direct",
+        direct_url="https://googlemcp.example.com/mcp",
+    )
+
+
+async def test_admin_deletes_direct_mcp(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "googlemcp": McpServerConfiguration(
+            name="googlemcp",
+            required_headers=(),
+            delegated_auth_passthrough=True,
+            auth_type="oauth2",
+            source="direct",
+            direct_url="https://googlemcp.example.com/mcp",
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "admin@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/mcp/direct/delete",
+            data={"name": "googlemcp"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.mcp_servers == {}
+
+
+async def test_non_admin_cannot_add_or_delete_direct_mcp(settings, fake_repository) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "user@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        add_response = await client.post(
+            "/api/mcp/direct",
+            data={
+                "name": "googlemcp",
+                "direct_url": "https://googlemcp.example.com/mcp",
+                "auth_mode": "passthrough",
+            },
+        )
+        delete_response = await client.post(
+            "/api/mcp/direct/delete",
+            data={"name": "googlemcp"},
+        )
+
+    assert add_response.status_code == 403
+    assert delete_response.status_code == 403
+    assert fake_repository.mcp_servers == {}
+
+
 async def test_discovery_partial_uses_result_cards_for_named_mcp(settings, fake_repository) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         auth = request.headers.get("x-litellm-api-key")
