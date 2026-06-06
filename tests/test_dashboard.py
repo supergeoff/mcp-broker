@@ -196,6 +196,13 @@ async def test_dashboard_deletes_all_secret_headers_for_named_mcp(settings, fake
 
 
 async def test_dashboard_renders_delete_controls_for_saved_headers(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "dokploy": McpServerConfiguration(
+            name="dokploy",
+            required_headers=("X-DOKPLOY-TOKEN", "X-DOKPLOY-ORG"),
+            delegated_auth_passthrough=False,
+        )
+    }
     fake_repository.secrets = {
         "dokploy": {
             "X-DOKPLOY-TOKEN": "dokploy-token",
