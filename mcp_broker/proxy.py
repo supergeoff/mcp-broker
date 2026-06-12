@@ -27,7 +27,7 @@ HOP_BY_HOP_HEADERS = {
 REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"authorization", "content-length", "host"}
 DELEGATED_REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "host", "x-litellm-api-key"}
 DIRECT_LITELLM_SECRET_BLOCKLIST = (REQUEST_BLOCKLIST - {"authorization"}) | {"x-litellm-api-key"}
-RESPONSE_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "set-cookie"}
+RESPONSE_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "content-encoding", "set-cookie"}
 logger = logging.getLogger(__name__)
 
 
@@ -212,16 +212,63 @@ async def proxy_direct_oauth_metadata_request(
 ) -> JSONResponse:
     if not server.direct_url:
         raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
-    upstream_url = _direct_metadata_url(server.direct_url, metadata_kind, request.url.query)
-    upstream_response = await http_client.get(upstream_url, headers=_direct_upstream_headers(request.headers, server))
+
+    last_response: httpx.Response | None = None
+    headers = _direct_upstream_headers(request.headers, server)
+    for upstream_url in _direct_metadata_urls(server.direct_url, metadata_kind, request.url.query):
+        try:
+            upstream_response = await http_client.get(upstream_url, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "Direct OAuth metadata request failed mcp=%s kind=%s url=%s error=%s",
+                server.name,
+                metadata_kind,
+                upstream_url,
+                exc,
+            )
+            continue
+
+        last_response = upstream_response
+        try:
+            payload = upstream_response.json()
+        except ValueError:
+            _log_direct_oauth_metadata_response_failure(
+                server=server,
+                metadata_kind=metadata_kind,
+                upstream_url=upstream_url,
+                upstream_response=upstream_response,
+                reason="invalid_json",
+            )
+            continue
+        if upstream_response.status_code >= 400:
+            _log_direct_oauth_metadata_response_failure(
+                server=server,
+                metadata_kind=metadata_kind,
+                upstream_url=upstream_url,
+                upstream_response=upstream_response,
+                reason="status_error",
+            )
+            continue
+        return JSONResponse(
+            _rewrite_direct_metadata(payload, settings, server),
+            status_code=upstream_response.status_code,
+            headers=_response_headers(upstream_response.headers),
+        )
+
+    if last_response is None:
+        raise HTTPException(status_code=502, detail="Direct OAuth metadata upstream request failed")
+
     try:
-        payload = upstream_response.json()
+        payload = last_response.json()
     except ValueError:
-        payload = {}
+        return JSONResponse(
+            {"detail": "Direct OAuth metadata upstream returned non-JSON response"},
+            status_code=502,
+        )
     return JSONResponse(
         _rewrite_direct_metadata(payload, settings, server),
-        status_code=upstream_response.status_code,
-        headers=_response_headers(upstream_response.headers),
+        status_code=last_response.status_code,
+        headers=_response_headers(last_response.headers),
     )
 
 
@@ -394,6 +441,31 @@ def _direct_metadata_url(direct_url: str, metadata_kind: str, query: str) -> htt
     return url.copy_with(path=path, query=query.encode("utf-8"))
 
 
+def _direct_metadata_urls(direct_url: str, metadata_kind: str, query: str) -> list[httpx.URL]:
+    candidates = [_direct_metadata_url(direct_url, metadata_kind, query)]
+    if metadata_kind == "oauth-authorization-server":
+        url = httpx.URL(direct_url)
+        resource_path = url.path.strip("/")
+        if resource_path:
+            candidates.append(
+                url.copy_with(
+                    path=f"/.well-known/oauth-authorization-server/{resource_path}",
+                    query=query.encode("utf-8"),
+                )
+            )
+        candidates.append(url.copy_with(path="/.well-known/openid-configuration", query=query.encode("utf-8")))
+
+    deduped: list[httpx.URL] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
 def _response_headers(incoming: Mapping[str, str]) -> dict[str, str]:
     return {
         name: value
@@ -473,6 +545,32 @@ def _rewrite_direct_metadata_string(value: str, settings: Settings, server: McpS
 def _url_origin(url: httpx.URL) -> str:
     port = f":{url.port}" if url.port is not None else ""
     return f"{url.scheme}://{url.host}{port}"
+
+
+def _log_direct_oauth_metadata_response_failure(
+    *,
+    server: McpServerConfiguration,
+    metadata_kind: str,
+    upstream_url: httpx.URL,
+    upstream_response: httpx.Response,
+    reason: str,
+) -> None:
+    logger.warning(
+        "Direct OAuth metadata request failed mcp=%s kind=%s url=%s status=%s reason=%s body=%r",
+        server.name,
+        metadata_kind,
+        upstream_url,
+        upstream_response.status_code,
+        reason,
+        _response_text_excerpt(upstream_response),
+    )
+
+
+def _response_text_excerpt(response: httpx.Response, limit: int = 500) -> str:
+    text = response.text
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
 
 
 def _log_litellm_mcp_request(

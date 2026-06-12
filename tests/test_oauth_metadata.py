@@ -1,3 +1,7 @@
+import gzip
+import json
+import logging
+
 import httpx
 import pytest
 
@@ -165,6 +169,101 @@ async def test_direct_passthrough_authorization_server_metadata_is_proxied_and_r
         "token_endpoint": "https://broker.example.com/googlemcp/token",
         "registration_endpoint": "https://broker.example.com/googlemcp/register",
     }
+
+
+async def test_direct_passthrough_metadata_drops_upstream_content_encoding(settings) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = {
+            "issuer": "https://googlemcp.example.com",
+            "authorization_endpoint": "https://googlemcp.example.com/authorize",
+            "token_endpoint": "https://googlemcp.example.com/token",
+            "registration_endpoint": "https://googlemcp.example.com/register",
+        }
+        return httpx.Response(
+            200,
+            content=gzip.compress(json.dumps(payload).encode("utf-8")),
+            headers={"content-encoding": "gzip", "content-type": "application/json"},
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/.well-known/oauth-authorization-server/googlemcp")
+
+    assert response.status_code == 200
+    assert "content-encoding" not in response.headers
+    assert response.json()["issuer"] == "https://broker.example.com/googlemcp"
+
+
+async def test_direct_passthrough_authorization_server_metadata_falls_back_to_path_variant(
+    settings,
+    caplog,
+) -> None:
+    captured_paths: list[str] = []
+    caplog.set_level(logging.WARNING, logger="mcp_broker.proxy")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured_paths.append(request.url.path)
+        if request.url.path == "/.well-known/oauth-authorization-server/mcp":
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": "https://googlemcp.example.com",
+                    "authorization_endpoint": "https://googlemcp.example.com/authorize",
+                    "token_endpoint": "https://googlemcp.example.com/token",
+                    "registration_endpoint": "https://googlemcp.example.com/register",
+                },
+            )
+        return httpx.Response(404, content=b"missing")
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "googlemcp": McpServerConfiguration(
+                    name="googlemcp",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://googlemcp.example.com/mcp",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/.well-known/oauth-authorization-server/googlemcp")
+
+    assert response.status_code == 200
+    assert captured_paths == [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+    ]
+    assert response.json()["issuer"] == "https://broker.example.com/googlemcp"
+    assert "Direct OAuth metadata request failed" in caplog.text
 
 
 async def test_named_mcp_without_bearer_token_returns_oauth_challenge(settings, fake_repository) -> None:
