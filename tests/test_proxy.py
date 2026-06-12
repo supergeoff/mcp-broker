@@ -180,17 +180,18 @@ async def test_litellm_proxy_logs_secret_header_names_without_values_on_auth_fai
     assert "oauth-access-token" not in caplog.text
 
 
-async def test_named_mcp_subpath_routes_under_litellm_server_mcp(settings) -> None:
+async def test_named_mcp_public_subpath_uses_litellm_server_mcp_root(settings) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
         captured["path"] = request.url.path
         captured["query"] = request.url.query.decode()
+        captured["headers"] = dict(request.headers)
         return httpx.Response(200, content=b"ok")
 
     app = create_app(
         settings=settings,
-        repository=FakeRepository(secrets={"context7": {"X-CONTEXT7-API-KEY": "context7-key"}}),
+        repository=FakeRepository(secrets={"hindsight": {"X-Bank-Id": "geoff"}}),
         jwt_validator=FakeJwtValidator(),
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
@@ -200,13 +201,15 @@ async def test_named_mcp_subpath_routes_under_litellm_server_mcp(settings) -> No
         base_url="http://testserver",
     ) as client:
         response = await client.get(
-            "/context7/events?cursor=abc",
+            "/hindsight/geoff?cursor=abc",
             headers={"Authorization": "Bearer oauth-access-token"},
         )
 
     assert response.status_code == 200
-    assert captured["path"] == "/context7/mcp/events"
+    assert captured["path"] == "/hindsight/mcp"
     assert captured["query"] == "cursor=abc"
+    assert captured["headers"]["x-bank-id"] == "geoff"
+    assert captured["headers"]["x-mcp-hindsight-x-bank-id"] == "geoff"
 
 
 async def test_proxy_returns_412_when_user_vault_is_not_ready(settings) -> None:

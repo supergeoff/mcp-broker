@@ -247,7 +247,7 @@ async def proxy_delegated_oauth_metadata_request(
 
 
 def _upstream_url(settings: Settings, mcp_name: str, subpath: str, query: str) -> httpx.URL:
-    path = f"/{mcp_name}/mcp" if not subpath else f"/{mcp_name}/mcp/{subpath}"
+    path = f"/{mcp_name}/mcp"
     return httpx.URL(f"{settings.litellm_base_url}{path}").copy_with(query=query.encode("utf-8"))
 
 
