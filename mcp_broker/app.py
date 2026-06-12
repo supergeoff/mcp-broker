@@ -137,6 +137,29 @@ def create_app(
             )
         return _protected_resource_metadata(settings, normalized_mcp_name)
 
+    @app.get("/.well-known/oauth-protected-resource/{mcp_name}/{subpath:path}")
+    async def named_subpath_protected_resource_metadata(request: Request, mcp_name: str, subpath: str):
+        normalized_mcp_name = _normalize_mcp_name(mcp_name)
+        normalized_subpath = _normalize_mcp_subpath(subpath)
+        server = await _repository(app).get_mcp_server(normalized_mcp_name)
+        if server and server.delegated_auth_passthrough:
+            if server.source == MCP_SOURCE_DIRECT:
+                return await proxy_direct_oauth_metadata_request(
+                    request=request,
+                    server=server,
+                    metadata_kind="oauth-protected-resource",
+                    settings=settings,
+                    http_client=_http_client(app),
+                )
+            return await proxy_delegated_oauth_metadata_request(
+                request=request,
+                mcp_name=normalized_mcp_name,
+                path=f"/.well-known/oauth-protected-resource/{normalized_mcp_name}/mcp",
+                settings=settings,
+                http_client=_http_client(app),
+            )
+        return _protected_resource_metadata(settings, normalized_mcp_name, normalized_subpath)
+
     @app.get("/.well-known/oauth-authorization-server/{mcp_name}")
     async def named_authorization_server_metadata(request: Request, mcp_name: str):
         normalized_mcp_name = _normalize_mcp_name(mcp_name)
@@ -159,9 +182,9 @@ def create_app(
             http_client=_http_client(app),
         )
 
-    def _protected_resource_metadata(settings: Settings, mcp_name: str) -> dict[str, object]:
+    def _protected_resource_metadata(settings: Settings, mcp_name: str, subpath: str = "") -> dict[str, object]:
         return {
-            "resource": f"{settings.public_url}/{mcp_name}",
+            "resource": _public_mcp_resource(settings, mcp_name, subpath),
             "authorization_servers": [settings.oidc_issuer],
             "bearer_methods_supported": ["header"],
             "scopes_supported": OIDC_SCOPES_SUPPORTED,
@@ -435,11 +458,11 @@ def create_app(
 
         token = _bearer_token(request.headers)
         if token is None:
-            return _oauth_challenge(settings, mcp_name)
+            return _oauth_challenge(settings, mcp_name, subpath)
         try:
             claims = app.state.jwt_validator.verify(token)
         except JwtValidationError:
-            return _oauth_challenge(settings, mcp_name)
+            return _oauth_challenge(settings, mcp_name, subpath)
 
         await _repository(app).upsert_user(claims["sub"], claims.get("email"))
         if not app.state.rate_limiter.allow(claims["sub"]):
@@ -520,15 +543,12 @@ def _bearer_token(headers: Mapping[str, str]) -> str | None:
     return value.split(" ", 1)[1].strip()
 
 
-def _oauth_challenge(settings: Settings, mcp_name: str) -> JSONResponse:
+def _oauth_challenge(settings: Settings, mcp_name: str, subpath: str = "") -> JSONResponse:
+    metadata_url = _protected_resource_metadata_url(settings, mcp_name, subpath)
     return JSONResponse(
         {"detail": "OAuth bearer token required"},
         status_code=401,
-        headers={
-            "WWW-Authenticate": (
-                f'Bearer resource_metadata="{settings.public_url}/.well-known/oauth-protected-resource/{mcp_name}"'
-            )
-        },
+        headers={"WWW-Authenticate": f'Bearer resource_metadata="{metadata_url}"'},
     )
 
 
@@ -539,6 +559,33 @@ def _normalize_mcp_name(value: str) -> str:
     if not MCP_NAME_RE.fullmatch(normalized):
         raise HTTPException(status_code=400, detail="MCP name must use letters, numbers, dot, dash, or underscore")
     return normalized
+
+
+def _normalize_mcp_subpath(value: str) -> str:
+    normalized = value.strip().strip("/")
+    if not normalized:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    segments = normalized.split("/")
+    if any(not MCP_NAME_RE.fullmatch(segment) for segment in segments):
+        raise HTTPException(
+            status_code=400,
+            detail="MCP subpath must use letters, numbers, dot, dash, or underscore",
+        )
+    return "/".join(segments)
+
+
+def _public_mcp_resource(settings: Settings, mcp_name: str, subpath: str = "") -> str:
+    resource = f"{settings.public_url}/{mcp_name}"
+    if subpath:
+        resource = f"{resource}/{_normalize_mcp_subpath(subpath)}"
+    return resource
+
+
+def _protected_resource_metadata_url(settings: Settings, mcp_name: str, subpath: str = "") -> str:
+    metadata_url = f"{settings.public_url}/.well-known/oauth-protected-resource/{mcp_name}"
+    if subpath:
+        metadata_url = f"{metadata_url}/{_normalize_mcp_subpath(subpath)}"
+    return metadata_url
 
 
 def _normalize_direct_url(value: str) -> str:

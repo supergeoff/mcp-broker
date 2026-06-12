@@ -250,12 +250,13 @@ async def test_direct_broker_auth_mcp_proxies_without_litellm_key(settings) -> N
                 "googlemcp": {
                     "Authorization": "Bearer direct-upstream-token",
                     "X-GOOGLE-WORKSPACE": "workspace-token",
+                    "X-Bank-Id": "geoff",
                 }
             },
             mcp_servers={
                 "googlemcp": McpServerConfiguration(
                     name="googlemcp",
-                    required_headers=("Authorization", "X-GOOGLE-WORKSPACE"),
+                    required_headers=("Authorization", "X-GOOGLE-WORKSPACE", "X-Bank-Id"),
                     delegated_auth_passthrough=False,
                     auth_type=None,
                     source="direct",
@@ -283,6 +284,7 @@ async def test_direct_broker_auth_mcp_proxies_without_litellm_key(settings) -> N
     assert captured["body"] == b'{"jsonrpc":"2.0"}'
     assert captured["headers"]["authorization"] == "Bearer direct-upstream-token"
     assert captured["headers"]["x-google-workspace"] == "workspace-token"
+    assert captured["headers"]["x-bank-id"] == "geoff"
     assert "x-litellm-api-key" not in captured["headers"]
 
 

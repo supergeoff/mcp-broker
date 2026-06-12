@@ -40,6 +40,28 @@ async def test_named_protected_resource_metadata_points_clients_to_pocket_id(set
     }
 
 
+async def test_named_subpath_protected_resource_metadata_points_clients_to_pocket_id(
+    settings,
+    fake_repository,
+) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/.well-known/oauth-protected-resource/hindsight/geoff")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resource": "https://broker.example.com/hindsight/geoff",
+        "authorization_servers": ["https://id.example.com"],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["openid", "email", "profile"],
+        "resource_documentation": "https://broker.example.com/",
+    }
+
+
 async def test_direct_passthrough_protected_resource_metadata_is_proxied_and_rewritten(settings) -> None:
     captured: dict[str, object] = {}
 
@@ -157,6 +179,24 @@ async def test_named_mcp_without_bearer_token_returns_oauth_challenge(settings, 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == (
         'Bearer resource_metadata="https://broker.example.com/.well-known/oauth-protected-resource/dokploy"'
+    )
+
+
+async def test_named_mcp_subpath_without_bearer_token_returns_subpath_oauth_challenge(
+    settings,
+    fake_repository,
+) -> None:
+    app = create_app(settings=settings, repository=fake_repository)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post("/hindsight/geoff", content=b"{}")
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == (
+        'Bearer resource_metadata="https://broker.example.com/.well-known/oauth-protected-resource/hindsight/geoff"'
     )
 
 
