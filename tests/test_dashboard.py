@@ -733,6 +733,7 @@ async def test_admin_renders_direct_mcp_form_and_entries(settings, fake_reposito
     assert 'name="name"' in response.text
     assert 'name="direct_url"' in response.text
     assert 'name="auth_mode"' in response.text
+    assert 'name="static_headers"' in response.text
     assert "googlemcp" in response.text
     assert "https://googlemcp.example.com/mcp" in response.text
     assert 'action="/api/mcp/direct/delete"' in response.text
@@ -758,6 +759,7 @@ async def test_admin_adds_direct_passthrough_mcp(settings, fake_repository) -> N
                 "auth_mode": "passthrough",
                 "auth_type": "oauth2",
                 "required_headers": "Authorization, X-GOOGLE-WORKSPACE, X-GOOGLE-ORG",
+                "static_headers": "X-UPSTREAM-TOKEN: upstream-secret",
             },
             follow_redirects=False,
         )
@@ -770,6 +772,7 @@ async def test_admin_adds_direct_passthrough_mcp(settings, fake_repository) -> N
         auth_type="oauth2",
         source="direct",
         direct_url="https://googlemcp.example.com/mcp",
+        static_headers={"X-UPSTREAM-TOKEN": "upstream-secret"},
     )
 
 

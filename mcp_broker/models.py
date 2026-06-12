@@ -53,4 +53,5 @@ class McpServer(Base):
     auth_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="litellm")
     direct_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    static_headers_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

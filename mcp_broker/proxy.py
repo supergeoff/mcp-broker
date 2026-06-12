@@ -1,6 +1,5 @@
 import json
 import logging
-from hashlib import sha256
 from collections.abc import Mapping
 from collections.abc import AsyncIterator
 from urllib.parse import parse_qsl, urlencode
@@ -41,8 +40,6 @@ async def proxy_mcp_request(
     settings: Settings,
     repository: Repository,
     http_client: httpx.AsyncClient,
-    litellm_mcp_name: str | None = None,
-    secrets_override: Mapping[str, str] | None = None,
 ) -> StreamingResponse:
     litellm_key = await repository.get_litellm_key(user_sub)
     if not litellm_key:
@@ -51,10 +48,10 @@ async def proxy_mcp_request(
             detail=f"Vault incomplete. Open {settings.public_url}/ and add your LiteLLM key.",
         )
 
-    secrets = dict(secrets_override) if secrets_override is not None else await repository.get_secrets(user_sub, mcp_name)
+    secrets = await repository.get_secrets(user_sub, mcp_name)
     body = await request.body()
     upstream_headers = _upstream_headers(request.headers, mcp_name, litellm_key, secrets)
-    url = _upstream_url(settings, litellm_mcp_name or mcp_name, subpath, request.url.query)
+    url = _upstream_url(settings, mcp_name, subpath, request.url.query)
     upstream_request = http_client.build_request(
         request.method,
         url,
@@ -133,7 +130,7 @@ async def proxy_direct_broker_mcp_request(
     upstream_request = http_client.build_request(
         request.method,
         _direct_mcp_url(server.direct_url, subpath, request.url.query),
-        headers=_direct_broker_upstream_headers(request.headers, secrets),
+        headers=_direct_broker_upstream_headers(request.headers, secrets, server.static_headers),
         content=await request.body(),
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
@@ -249,68 +246,6 @@ async def proxy_delegated_oauth_metadata_request(
     )
 
 
-async def ensure_hindsight_bank_litellm_server(
-    *,
-    bank_id: str,
-    settings: Settings,
-    http_client: httpx.AsyncClient,
-) -> str:
-    server_name = _hindsight_bank_litellm_server_name(bank_id)
-    servers_response = await http_client.get(
-        f"{settings.litellm_base_url}/v1/mcp/server",
-        headers={"x-litellm-api-key": litellm_auth_value(settings.litellm_admin_key)},
-    )
-    servers_response.raise_for_status()
-    servers = servers_response.json()
-    if not isinstance(servers, list):
-        raise HTTPException(status_code=502, detail="LiteLLM MCP catalog response is invalid")
-
-    for server in servers:
-        if isinstance(server, dict) and server.get("server_name") == server_name:
-            return server_name
-
-    base_server = next(
-        (
-            server
-            for server in servers
-            if isinstance(server, dict) and server.get("server_name") == "hindsight"
-        ),
-        None,
-    )
-    if not isinstance(base_server, dict):
-        raise HTTPException(status_code=502, detail="LiteLLM Hindsight server is not configured")
-
-    base_url = str(base_server.get("url") or "").rstrip("/")
-    if not base_url:
-        raise HTTPException(status_code=502, detail="LiteLLM Hindsight server is missing url")
-
-    create_response = await http_client.post(
-        f"{settings.litellm_base_url}/v1/mcp/server",
-        headers={
-            "x-litellm-api-key": litellm_auth_value(settings.litellm_admin_key),
-            "litellm-changed-by": "mcp-broker",
-        },
-        json={
-            "server_name": server_name,
-            "alias": f"hindsight/{bank_id}",
-            "description": f"Hindsight memory bank {bank_id}",
-            "url": f"{base_url}/{bank_id}",
-            "transport": base_server.get("transport") or "http",
-            "auth_type": base_server.get("auth_type") or "none",
-            "static_headers": base_server.get("static_headers"),
-            "mcp_access_groups": base_server.get("mcp_access_groups") or ["All"],
-            "available_on_public_internet": bool(base_server.get("available_on_public_internet", True)),
-        },
-    )
-    create_response.raise_for_status()
-    return server_name
-
-
-def _hindsight_bank_litellm_server_name(bank_id: str) -> str:
-    digest = sha256(bank_id.encode("utf-8")).hexdigest()[:16]
-    return f"hindsight-bank-{digest}"
-
-
 def _upstream_url(settings: Settings, mcp_name: str, subpath: str, query: str) -> httpx.URL:
     path = f"/{mcp_name}/mcp" if not subpath else f"/{mcp_name}/mcp/{subpath}"
     return httpx.URL(f"{settings.litellm_base_url}{path}").copy_with(query=query.encode("utf-8"))
@@ -348,6 +283,7 @@ def _litellm_mcp_secret_headers(mcp_name: str, secrets: Mapping[str, str]) -> di
 def _direct_broker_upstream_headers(
     incoming: Mapping[str, str],
     secrets: Mapping[str, str],
+    static_headers: Mapping[str, str],
 ) -> dict[str, str]:
     headers = {
         name: value
@@ -355,6 +291,7 @@ def _direct_broker_upstream_headers(
         if name.lower() not in REQUEST_BLOCKLIST | {"x-litellm-api-key"}
     }
     headers.update(secrets)
+    headers.update(static_headers)
     return headers
 
 

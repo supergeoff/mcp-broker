@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from typing import Protocol
 
@@ -47,6 +47,7 @@ class McpServerConfiguration:
     auth_type: str | None = None
     source: str = MCP_SOURCE_LITELLM
     direct_url: str | None = None
+    static_headers: dict[str, str] = field(default_factory=dict)
     active: bool = True
 
 
@@ -190,6 +191,7 @@ class VaultRepository:
                             auth_type=normalized.auth_type,
                             source=MCP_SOURCE_LITELLM,
                             direct_url=None,
+                            static_headers_json="{}",
                             active=True,
                         )
                     )
@@ -199,6 +201,7 @@ class VaultRepository:
                     stored.auth_type = normalized.auth_type
                     stored.source = MCP_SOURCE_LITELLM
                     stored.direct_url = None
+                    stored.static_headers_json = "{}"
                     stored.active = True
             rows = (
                 await session.scalars(
@@ -221,11 +224,13 @@ class VaultRepository:
                 auth_type=server.auth_type,
                 source=MCP_SOURCE_DIRECT,
                 direct_url=server.direct_url,
+                static_headers=server.static_headers,
             )
         )
         async with self._session_factory() as session:
             stored = await session.get(McpServer, normalized.name)
             required_headers_json = json.dumps(list(normalized.required_headers))
+            static_headers_json = _encrypted_headers_json(normalized.static_headers, self._cipher)
             if stored is None:
                 session.add(
                     McpServer(
@@ -235,6 +240,7 @@ class VaultRepository:
                         auth_type=normalized.auth_type,
                         source=normalized.source,
                         direct_url=normalized.direct_url,
+                        static_headers_json=static_headers_json,
                         active=True,
                     )
                 )
@@ -244,6 +250,7 @@ class VaultRepository:
                 stored.auth_type = normalized.auth_type
                 stored.source = normalized.source
                 stored.direct_url = normalized.direct_url
+                stored.static_headers_json = static_headers_json
                 stored.active = True
             await session.commit()
 
@@ -266,12 +273,12 @@ class VaultRepository:
             stored = await session.get(McpServer, mcp_name.strip())
             if stored is None or not stored.active:
                 return None
-            return _mcp_server_configuration_from_row(stored)
+            return _mcp_server_configuration_from_row(stored, self._cipher)
 
     async def list_mcp_servers(self) -> list[McpServerConfiguration]:
         async with self._session_factory() as session:
             rows = (await session.scalars(select(McpServer).order_by(McpServer.name))).all()
-            return [_mcp_server_configuration_from_row(row) for row in rows]
+            return [_mcp_server_configuration_from_row(row, self._cipher) for row in rows]
 
     async def set_mcp_delegated_auth(self, mcp_name: str, enabled: bool) -> None:
         normalized_name = mcp_name.strip()
@@ -285,6 +292,7 @@ class VaultRepository:
                         delegated_auth_passthrough=enabled,
                         source=MCP_SOURCE_LITELLM,
                         direct_url=None,
+                        static_headers_json="{}",
                         active=True,
                     )
                 )
@@ -332,6 +340,13 @@ def _normalize_mcp_server_configuration(server: McpServerConfiguration) -> McpSe
         raise ValueError("Direct MCP servers require a direct_url")
     if source == MCP_SOURCE_LITELLM:
         direct_url = None
+        static_headers = {}
+    else:
+        static_headers = {
+            str(name).strip(): str(value)
+            for name, value in server.static_headers.items()
+            if str(name).strip()
+        }
 
     return McpServerConfiguration(
         name=server.name.strip(),
@@ -340,11 +355,12 @@ def _normalize_mcp_server_configuration(server: McpServerConfiguration) -> McpSe
         auth_type=server.auth_type.strip() if server.auth_type and server.auth_type.strip() else None,
         source=source,
         direct_url=direct_url,
+        static_headers=dict(sorted(static_headers.items())),
         active=server.active,
     )
 
 
-def _mcp_server_configuration_from_row(row: McpServer) -> McpServerConfiguration:
+def _mcp_server_configuration_from_row(row: McpServer, cipher: FernetCipher) -> McpServerConfiguration:
     try:
         headers = json.loads(row.required_headers_json)
     except json.JSONDecodeError:
@@ -356,5 +372,27 @@ def _mcp_server_configuration_from_row(row: McpServer) -> McpServerConfiguration
         auth_type=row.auth_type,
         source=row.source or MCP_SOURCE_LITELLM,
         direct_url=row.direct_url,
+        static_headers=_decrypted_headers_json(row.static_headers_json, cipher),
         active=row.active,
     )
+
+
+def _encrypted_headers_json(headers: dict[str, str], cipher: FernetCipher) -> str:
+    return json.dumps({name: cipher.encrypt(value) for name, value in headers.items()})
+
+
+def _decrypted_headers_json(value: str | None, cipher: FernetCipher) -> dict[str, str]:
+    if not value:
+        return {}
+    try:
+        headers = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(headers, dict):
+        return {}
+    decrypted: dict[str, str] = {}
+    for name, encrypted in headers.items():
+        if not isinstance(name, str) or not isinstance(encrypted, str):
+            continue
+        decrypted[name] = cipher.decrypt(encrypted)
+    return dict(sorted(decrypted.items()))

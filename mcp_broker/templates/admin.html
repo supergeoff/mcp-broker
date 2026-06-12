@@ -93,6 +93,10 @@
         <label for="direct-mcp-headers">Required headers</label>
         <input id="direct-mcp-headers" name="required_headers" list="common-secret-headers" autocomplete="off" placeholder="Authorization, X-API-Key">
       </div>
+      <div class="field field-wide">
+        <label for="direct-mcp-static-headers">Static upstream headers</label>
+        <textarea id="direct-mcp-static-headers" name="static_headers" rows="3" autocomplete="off" placeholder="Authorization: Basic ..."></textarea>
+      </div>
       <div class="actions">
         <button class="button button-primary" type="submit">Add direct MCP</button>
       </div>
@@ -117,6 +121,9 @@
                   {% endif %}
                 </div>
                 <p class="card-description">{{ server.direct_url }}</p>
+                {% if server.static_headers %}
+                  <p class="card-description">Static headers: {{ server.static_headers.keys() | list | join(", ") }}</p>
+                {% endif %}
               </div>
               <form method="post" action="/api/mcp/direct/delete">
                 <input type="hidden" name="name" value="{{ server.name }}">

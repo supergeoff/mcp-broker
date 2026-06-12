@@ -20,7 +20,6 @@ from mcp_broker.discovery import DiscoveryClient
 from mcp_broker.litellm_health import LiteLLMHealthClient
 from mcp_broker.mcp_health import McpToolHealth, McpToolsHealthClient, health_unknown
 from mcp_broker.models import Base
-from mcp_broker.proxy import ensure_hindsight_bank_litellm_server
 from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
 from mcp_broker.proxy import proxy_direct_broker_mcp_request, proxy_direct_oauth_endpoint_request
@@ -395,6 +394,7 @@ def create_app(
         if auth_mode not in {"broker", "passthrough"}:
             raise HTTPException(status_code=400, detail="Auth mode must be broker or passthrough")
         required_headers = _parse_required_headers(str(form.get("required_headers", "")))
+        static_headers = _parse_static_headers(str(form.get("static_headers", "")))
         auth_type = str(form.get("auth_type", "")).strip() or None
         await _repository(app).upsert_direct_mcp_server(
             McpServerConfiguration(
@@ -404,6 +404,7 @@ def create_app(
                 auth_type=auth_type,
                 source=MCP_SOURCE_DIRECT,
                 direct_url=direct_url,
+                static_headers=static_headers,
             )
         )
         return RedirectResponse("/admin", status_code=303)
@@ -476,26 +477,6 @@ def create_app(
                 user_sub=claims["sub"],
                 repository=_repository(app),
                 http_client=_http_client(app),
-            )
-        if mcp_name == "hindsight" and subpath:
-            bank_id = _normalize_hindsight_bank_id(subpath)
-            litellm_mcp_name = await ensure_hindsight_bank_litellm_server(
-                bank_id=bank_id,
-                settings=settings,
-                http_client=_http_client(app),
-            )
-            secrets = await _repository(app).get_secrets(claims["sub"], mcp_name)
-            secrets = {**secrets, "X-Bank-Id": bank_id}
-            return await proxy_mcp_request(
-                request=request,
-                mcp_name=mcp_name,
-                subpath="",
-                user_sub=claims["sub"],
-                settings=settings,
-                repository=_repository(app),
-                http_client=_http_client(app),
-                litellm_mcp_name=litellm_mcp_name,
-                secrets_override=secrets,
             )
         return await proxy_mcp_request(
             request=request,
@@ -595,13 +576,6 @@ def _normalize_mcp_subpath(value: str) -> str:
     return "/".join(segments)
 
 
-def _normalize_hindsight_bank_id(value: str) -> str:
-    bank_id = _normalize_mcp_subpath(value)
-    if "/" in bank_id:
-        raise HTTPException(status_code=400, detail="Hindsight bank id must be a single path segment")
-    return bank_id
-
-
 def _public_mcp_resource(settings: Settings, mcp_name: str, subpath: str = "") -> str:
     resource = f"{settings.public_url}/{mcp_name}"
     if subpath:
@@ -632,6 +606,24 @@ def _parse_required_headers(value: str) -> tuple[str, ...]:
     if invalid:
         raise HTTPException(status_code=400, detail=f"Invalid required header: {invalid[0]}")
     return tuple(sorted(set(required_headers)))
+
+
+def _parse_static_headers(value: str) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for line in value.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if ":" not in stripped:
+            raise HTTPException(status_code=400, detail="Static headers must use 'Header-Name: value' lines")
+        name, header_value = stripped.split(":", 1)
+        header_name = normalize_secret_header_name(name)
+        if not is_valid_secret_header_name(header_name):
+            raise HTTPException(status_code=400, detail=f"Invalid static header: {header_name}")
+        if not header_value.strip():
+            raise HTTPException(status_code=400, detail=f"Static header {header_name} requires a value")
+        headers[header_name] = header_value.strip()
+    return dict(sorted(headers.items()))
 
 
 def _session_user(request: Request) -> dict[str, str] | None:
@@ -679,5 +671,7 @@ def _ensure_mcp_server_catalog_columns(connection: Connection) -> None:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'litellm'"))
     if "direct_url" not in columns:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN direct_url TEXT"))
+    if "static_headers_json" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN static_headers_json TEXT NOT NULL DEFAULT '{}'"))
     if "active" not in columns:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE"))

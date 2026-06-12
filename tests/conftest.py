@@ -106,6 +106,7 @@ class FakeRepository:
                 auth_type=server.auth_type,
                 source="litellm",
                 direct_url=None,
+                static_headers={},
                 active=True,
             )
         for name, server in list(self.mcp_servers.items()):
@@ -117,6 +118,7 @@ class FakeRepository:
                     auth_type=server.auth_type,
                     source=server.source,
                     direct_url=server.direct_url,
+                    static_headers=server.static_headers,
                     active=False,
                 )
 
@@ -128,6 +130,7 @@ class FakeRepository:
             auth_type=server.auth_type,
             source="direct",
             direct_url=server.direct_url.rstrip("/") if server.direct_url else None,
+            static_headers=dict(server.static_headers),
             active=True,
         )
 
@@ -141,6 +144,7 @@ class FakeRepository:
                 auth_type=existing.auth_type,
                 source=existing.source,
                 direct_url=existing.direct_url,
+                static_headers=existing.static_headers,
                 active=False,
             )
 
@@ -163,6 +167,7 @@ class FakeRepository:
             auth_type=existing.auth_type if existing else None,
             source=existing.source if existing else "litellm",
             direct_url=existing.direct_url if existing else None,
+            static_headers=existing.static_headers if existing else {},
             active=existing.active if existing else True,
         )
 

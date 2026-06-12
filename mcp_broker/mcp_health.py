@@ -72,7 +72,7 @@ class McpToolsHealthClient:
             secrets = await repository.get_secrets(user_sub, server.name)
             return server.name, await self._probe_tools(
                 httpx.URL(direct_url),
-                _mcp_headers(_direct_broker_upstream_headers({}, secrets)),
+                _mcp_headers(_direct_broker_upstream_headers({}, secrets, getattr(server, "static_headers", {}))),
             )
 
         if not litellm_key:

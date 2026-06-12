@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import pytest
 
-from mcp_broker.models import Base, UserLiteLLMKey
+from mcp_broker.models import Base, McpServer, UserLiteLLMKey
 from mcp_broker.security import FernetCipher
 from mcp_broker.storage import McpServerConfiguration, VaultRepository
 
@@ -130,6 +130,7 @@ async def test_vault_repository_persists_direct_mcp_server_configuration(encrypt
             auth_type="oauth2",
             source="direct",
             direct_url="https://googlemcp.example.com/mcp/",
+            static_headers={"Authorization": "Basic upstream-secret"},
         )
     )
 
@@ -140,6 +141,7 @@ async def test_vault_repository_persists_direct_mcp_server_configuration(encrypt
         auth_type="oauth2",
         source="direct",
         direct_url="https://googlemcp.example.com/mcp",
+        static_headers={"Authorization": "Basic upstream-secret"},
     )
     assert await repository.list_mcp_servers() == [
         McpServerConfiguration(
@@ -149,8 +151,15 @@ async def test_vault_repository_persists_direct_mcp_server_configuration(encrypt
             auth_type="oauth2",
             source="direct",
             direct_url="https://googlemcp.example.com/mcp",
+            static_headers={"Authorization": "Basic upstream-secret"},
         )
     ]
+
+    async with session_factory() as session:
+        stored = await session.get(McpServer, "googlemcp")
+
+    assert stored is not None
+    assert "Basic upstream-secret" not in stored.static_headers_json
 
     await engine.dispose()
 
