@@ -1,4 +1,6 @@
+import json
 import logging
+import re
 
 import httpx
 import pytest
@@ -56,6 +58,137 @@ async def test_proxy_injects_user_headers_and_removes_oauth_authorization(settin
     assert captured["headers"]["x-dokploy-token"] == "dokploy-user-token"
     assert captured["headers"]["x-mcp-dokploy-x-dokploy-token"] == "dokploy-user-token"
     assert "authorization" not in captured["headers"]
+
+
+async def test_proxy_rewrites_invalid_tool_names_and_restores_original_on_call(settings) -> None:
+    invalid_tool_name = "google.drive:search documents with a tool name that is much too long"
+    captured_bodies: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(await request.aread())
+        captured_bodies.append(payload)
+        if payload["method"] == "tools/list":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "tools": [
+                            {"name": invalid_tool_name, "description": "Search files"},
+                            {"name": "already_valid_1", "description": "Already valid"},
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        list_response = await client.post(
+            "/dokploy",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        rewritten_name = list_response.json()["result"]["tools"][0]["name"]
+        call_response = await client.post(
+            "/dokploy",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": rewritten_name, "arguments": {"query": "budget"}},
+            },
+        )
+
+    assert list_response.status_code == 200
+    assert call_response.status_code == 200
+    assert rewritten_name != invalid_tool_name
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,50}", rewritten_name)
+    assert list_response.json()["result"]["tools"][1]["name"] == "already_valid_1"
+    tool_calls = [body for body in captured_bodies if body.get("method") == "tools/call"]
+    assert tool_calls[0]["params"]["name"] == invalid_tool_name
+
+
+async def test_proxy_rewrites_invalid_tool_names_in_sse_tools_list(settings) -> None:
+    invalid_tool_name = "autobrowser.navigate.page"
+    captured_bodies: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(await request.aread())
+        captured_bodies.append(payload)
+        if payload["method"] == "tools/list":
+            message = {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {"tools": [{"name": invalid_tool_name, "description": "Navigate"}]},
+            }
+            return httpx.Response(
+                200,
+                content=f"event: message\ndata: {json.dumps(message)}\n\n".encode("utf-8"),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        list_response = await client.post(
+            "/autobrowser",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        data_line = next(line for line in list_response.text.splitlines() if line.startswith("data: "))
+        rewritten_name = json.loads(data_line.removeprefix("data: "))["result"]["tools"][0]["name"]
+        call_response = await client.post(
+            "/autobrowser",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": rewritten_name, "arguments": {}},
+            },
+        )
+
+    assert list_response.status_code == 200
+    assert call_response.status_code == 200
+    assert "." not in rewritten_name
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,50}", rewritten_name)
+    tool_calls = [body for body in captured_bodies if body.get("method") == "tools/call"]
+    assert tool_calls[0]["params"]["name"] == invalid_tool_name
 
 
 async def test_named_mcp_route_targets_litellm_server_mcp_and_scopes_headers(settings) -> None:
