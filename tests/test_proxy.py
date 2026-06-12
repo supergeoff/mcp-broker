@@ -128,7 +128,7 @@ async def test_proxy_rewrites_invalid_tool_names_and_restores_original_on_call(s
 
 
 async def test_proxy_rewrites_invalid_tool_names_in_sse_tools_list(settings) -> None:
-    invalid_tool_name = "autobrowser.navigate.page"
+    invalid_tool_name = "autobrowser-browser.get_auth_profile"
     captured_bodies: list[dict[str, object]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -185,7 +185,7 @@ async def test_proxy_rewrites_invalid_tool_names_in_sse_tools_list(settings) -> 
 
     assert list_response.status_code == 200
     assert call_response.status_code == 200
-    assert "." not in rewritten_name
+    assert rewritten_name == "autobrowser-browser_get_auth_profile"
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,50}", rewritten_name)
     tool_calls = [body for body in captured_bodies if body.get("method") == "tools/call"]
     assert tool_calls[0]["params"]["name"] == invalid_tool_name

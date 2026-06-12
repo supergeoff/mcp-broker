@@ -37,7 +37,6 @@ OAUTH_ENDPOINT_METADATA_FIELDS = {
 }
 TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 TOOL_NAME_MAX_LENGTH = 50
-TOOL_NAME_HASH_LENGTH = 10
 _TOOL_NAME_REWRITES: dict[tuple[str, str, str], dict[str, str]] = {}
 logger = logging.getLogger(__name__)
 
@@ -795,10 +794,7 @@ def _safe_tool_name(name: str) -> str:
 
     normalized = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")
     normalized = re.sub(r"_+", "_", normalized) or "tool"
-    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:TOOL_NAME_HASH_LENGTH]
-    prefix_length = TOOL_NAME_MAX_LENGTH - TOOL_NAME_HASH_LENGTH - 1
-    prefix = normalized[:prefix_length].rstrip("_-") or "tool"
-    return f"{prefix}_{digest}"
+    return normalized[:TOOL_NAME_MAX_LENGTH].rstrip("_-") or "tool"
 
 
 def _json_payload(body: bytes) -> object | None:
