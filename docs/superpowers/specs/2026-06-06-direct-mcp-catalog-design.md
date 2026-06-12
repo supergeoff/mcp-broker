@@ -6,7 +6,7 @@ Date: 2026-06-06
 
 Let broker admins add MCP servers to the public catalog that proxy directly to an MCP server URL instead of going through LiteLLM, while users keep seeing one complete catalog of broker-exposed MCP endpoints.
 
-This supports servers such as `googlemcp`, where the upstream FastMCP OAuth proxy is designed to talk to the final MCP client directly and breaks when chained behind LiteLLM OAuth delegation.
+This supports servers such as `googlemcp`, where the upstream direct upstream OAuth proxy is designed to talk to the final MCP client directly and breaks when chained behind LiteLLM OAuth delegation.
 
 ## Scope
 
@@ -36,7 +36,7 @@ Each catalog row has:
 
 - `name`: the public broker namespace, still validated by the existing MCP name rules.
 - `source`: either `litellm` or `direct`.
-- `direct_url`: required only when `source` is `direct`; it is the full upstream MCP endpoint such as `https://googlemcp.supergeoff.top/mcp`.
+- `direct_url`: required only when `source` is `direct`; it is the full upstream MCP endpoint such as `https://upstream-mcp.example.com/mcp`.
 - `auth_mode`: either `broker` or `passthrough`; persisted through the existing `delegated_auth_passthrough` boolean.
 - `required_headers_json`: unchanged; used for user secret-header forms and injection.
 - `auth_type`: optional descriptive metadata such as `oauth2`.
@@ -52,7 +52,7 @@ The `/admin` page gains a "Direct MCP servers" section.
 Admins can add a direct MCP entry with:
 
 - Name, for example `googlemcp`.
-- Direct MCP URL, for example `https://googlemcp.supergeoff.top/mcp`.
+- Direct MCP URL, for example `https://upstream-mcp.example.com/mcp`.
 - Auth mode:
   - `passthrough`: use upstream OAuth directly.
   - `broker`: require Pocket ID at the broker before proxying to the direct URL.
@@ -68,7 +68,7 @@ Non-admin users cannot add, edit, delete, or toggle catalog entries.
 The dashboard continues to read `repository.list_mcp_servers()` and render one server list. Direct entries appear alongside LiteLLM entries with the same public broker URL shape:
 
 ```text
-https://mcp.supergeoff.top/googlemcp
+https://broker.example.com/googlemcp
 ```
 
 The discovery button still refreshes LiteLLM-sourced metadata. It does not remove direct entries from the user-visible list.
@@ -118,18 +118,18 @@ For `source = direct` and `auth_mode = passthrough`:
 For a direct URL of:
 
 ```text
-https://googlemcp.supergeoff.top/mcp
+https://upstream-mcp.example.com/mcp
 ```
 
 The OAuth endpoint mapping is:
 
 ```text
-/googlemcp/authorize -> https://googlemcp.supergeoff.top/authorize
-/googlemcp/token     -> https://googlemcp.supergeoff.top/token
-/googlemcp/register  -> https://googlemcp.supergeoff.top/register
+/googlemcp/authorize -> https://upstream-mcp.example.com/authorize
+/googlemcp/token     -> https://upstream-mcp.example.com/token
+/googlemcp/register  -> https://upstream-mcp.example.com/register
 ```
 
-This lets FastMCP's OAuth proxy issue its consent and Google redirects against its own domain, while users still configure the broker URL as the MCP endpoint.
+This lets direct upstream's OAuth proxy issue its consent and Google redirects against its own domain, while users still configure the broker URL as the MCP endpoint.
 
 ## OAuth Metadata
 
@@ -138,15 +138,15 @@ Broker-auth entries continue to publish broker protected-resource metadata point
 Passthrough entries proxy upstream OAuth metadata. For direct entries, the upstream metadata URL is derived from the configured direct MCP URL:
 
 ```text
-https://googlemcp.supergeoff.top/.well-known/oauth-protected-resource/mcp
-https://googlemcp.supergeoff.top/.well-known/oauth-authorization-server/mcp
+https://upstream-mcp.example.com/.well-known/oauth-protected-resource/mcp
+https://upstream-mcp.example.com/.well-known/oauth-authorization-server/mcp
 ```
 
 The broker rewrites upstream URLs so standard clients see broker URLs:
 
-- Upstream resource `https://googlemcp.supergeoff.top/mcp` becomes `https://mcp.supergeoff.top/googlemcp`.
-- Upstream authorization server metadata URLs become `https://mcp.supergeoff.top/.well-known/oauth-authorization-server/googlemcp`.
-- Upstream OAuth endpoints under `https://googlemcp.supergeoff.top/authorize`, `/token`, and `/register` become broker endpoints under `/googlemcp/authorize`, `/googlemcp/token`, and `/googlemcp/register`.
+- Upstream resource `https://upstream-mcp.example.com/mcp` becomes `https://broker.example.com/googlemcp`.
+- Upstream authorization server metadata URLs become `https://broker.example.com/.well-known/oauth-authorization-server/googlemcp`.
+- Upstream OAuth endpoints under `https://upstream-mcp.example.com/authorize`, `/token`, and `/register` become broker endpoints under `/googlemcp/authorize`, `/googlemcp/token`, and `/googlemcp/register`.
 
 If upstream metadata is unavailable or malformed, the broker returns the upstream status with a JSON body after applying the same safe response-header filtering used elsewhere.
 
@@ -182,10 +182,10 @@ Planned tests:
 
 ## Acceptance Criteria
 
-- Admins can add `googlemcp` as a direct MCP entry pointing to `https://googlemcp.supergeoff.top/mcp`.
+- Admins can add `googlemcp` as a direct MCP entry pointing to `https://upstream-mcp.example.com/mcp`.
 - Admins can mark `googlemcp` as passthrough auth.
 - Users see `googlemcp` in the same catalog as LiteLLM MCP servers.
-- Users can configure clients with `https://mcp.supergeoff.top/googlemcp`.
+- Users can configure clients with `https://broker.example.com/googlemcp`.
 - `googlemcp` traffic no longer chains through LiteLLM.
 - Existing LiteLLM MCP servers continue to work unchanged.
 - Tests cover storage, admin UI, user catalog rendering, proxy routing, and OAuth metadata rewriting.

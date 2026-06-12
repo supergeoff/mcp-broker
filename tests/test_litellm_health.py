@@ -21,7 +21,7 @@ async def test_litellm_health_client_checks_health_with_admin_authorization(sett
                 ],
                 "unhealthy_endpoints": [
                     {
-                        "model": "claude-sonnet",
+                        "model": "sonnet-model",
                         "api_base": "https://api.anthropic.com",
                         "error": "401 upstream auth failed",
                     }
@@ -39,7 +39,7 @@ async def test_litellm_health_client_checks_health_with_admin_authorization(sett
     }
     assert [(endpoint.model, endpoint.status) for endpoint in report.endpoints] == [
         ("gpt-4o-mini", "healthy"),
-        ("claude-sonnet", "unhealthy"),
+        ("sonnet-model", "unhealthy"),
     ]
     assert report.endpoints[0].api_base == "https://api.openai.com/v1"
     assert report.endpoints[1].error == "401 upstream auth failed"

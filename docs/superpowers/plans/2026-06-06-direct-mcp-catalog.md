@@ -761,7 +761,7 @@ In `mcp_broker/templates/admin.html`, after the user table section, add:
       </div>
       <div class="field">
         <label for="direct-mcp-url">Direct MCP URL</label>
-        <input id="direct-mcp-url" name="direct_url" autocomplete="off" placeholder="https://googlemcp.supergeoff.top/mcp" required>
+        <input id="direct-mcp-url" name="direct_url" autocomplete="off" placeholder="https://upstream-mcp.example.com/mcp" required>
       </div>
       <div class="field">
         <label for="direct-mcp-auth-mode">Auth mode</label>
@@ -1751,16 +1751,16 @@ After the MCP client URL examples, add:
 Admins can also add direct MCP entries from `/admin`. A direct entry still uses the broker URL publicly:
 
 ```text
-https://your-broker-domain.example/googlemcp
+https://your-broker-domain.example/external-workspace
 ```
 
 but can proxy directly to an upstream endpoint such as:
 
 ```text
-https://googlemcp.supergeoff.top/mcp
+https://upstream-mcp.example.com/mcp
 ```
 
-Use upstream OAuth passthrough for direct servers that run their own OAuth proxy, such as FastMCP Google Workspace servers. In that mode the broker keeps the catalog entry and public URL, but OAuth endpoints and MCP traffic bypass LiteLLM.
+Use upstream OAuth passthrough for direct servers that run their own OAuth proxy, such as direct upstream OAuth servers. In that mode the broker keeps the catalog entry and public URL, but OAuth endpoints and MCP traffic bypass LiteLLM.
 ```
 
 - [ ] **Step 2: Run all tests**

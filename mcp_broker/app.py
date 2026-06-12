@@ -26,6 +26,7 @@ from mcp_broker.proxy import proxy_direct_broker_mcp_request, proxy_direct_oauth
 from mcp_broker.proxy import proxy_direct_oauth_metadata_request, proxy_direct_passthrough_mcp_request
 from mcp_broker.rate_limit import FixedWindowRateLimiter
 from mcp_broker.security import FernetCipher, JwtValidationError, JwtValidator
+from mcp_broker.secret_headers import is_valid_litellm_secret_header_name
 from mcp_broker.secret_headers import is_valid_secret_header_name, normalize_secret_header_name
 from mcp_broker.storage import MCP_SOURCE_DIRECT, McpServerConfiguration, Repository, VaultRepository
 
@@ -294,7 +295,8 @@ def create_app(
         mcp_name = _normalize_mcp_name(str(form.get("mcp_name", "")).strip())
         header_name = normalize_secret_header_name(str(form.get("header_name", "")))
         value = str(form.get("value", "")).strip()
-        if not is_valid_secret_header_name(header_name) or not value:
+        server = await _repository(app).get_mcp_server(mcp_name)
+        if not _is_valid_secret_header_for_server(header_name, server) or not value:
             raise HTTPException(status_code=400, detail="A valid header name and value are required")
         await _repository(app).upsert_secret(user["sub"], mcp_name, header_name, value)
         return RedirectResponse("/", status_code=303)
@@ -536,6 +538,12 @@ def _mcp_server_configurations(servers: list[Any]) -> list[McpServerConfiguratio
 
 def _is_admin_user(user: Mapping[str, str], settings: Settings) -> bool:
     return str(user.get("email") or "").lower() in settings.admin_emails
+
+
+def _is_valid_secret_header_for_server(header_name: str, server: Any | None) -> bool:
+    if server is not None and server.source == MCP_SOURCE_DIRECT:
+        return is_valid_secret_header_name(header_name)
+    return is_valid_litellm_secret_header_name(header_name)
 
 
 def _bearer_token(headers: Mapping[str, str]) -> str | None:

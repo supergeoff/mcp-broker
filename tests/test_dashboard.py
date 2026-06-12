@@ -288,7 +288,7 @@ async def test_dashboard_renders_delete_controls_for_saved_headers(settings, fak
     assert "Delete all" in response.text
 
 
-async def test_dashboard_uses_dokploy_shell_and_system_theme(settings, fake_repository) -> None:
+async def test_dashboard_uses_app_shell_and_system_theme(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
     cookie = _session_cookie(
         settings.session_secret,
@@ -392,7 +392,7 @@ async def test_dashboard_renders_direct_mcp_in_catalog(settings, fake_repository
     assert "googlemcp" in response.text
     assert "Direct" in response.text
     assert "OAuth direct" in response.text
-    assert "No client ID or client secret needed in Claude or OpenWebUI." in response.text
+    assert "No broker client credentials needed." in response.text
     assert "Health unknown" in response.text
 
 
@@ -641,7 +641,7 @@ async def test_dashboard_renders_common_header_suggestions_without_litellm_api_k
     assert "x-litellm-api-key" not in response.text
 
 
-async def test_admin_uses_dokploy_shell_and_status_badges(settings, fake_repository) -> None:
+async def test_admin_uses_app_shell_and_status_badges(settings, fake_repository) -> None:
     app = create_app(settings=settings, repository=fake_repository)
     cookie = _session_cookie(
         settings.session_secret,
@@ -680,7 +680,7 @@ async def test_admin_direct_mcp_form_uses_neutral_placeholders(settings, fake_re
     assert 'placeholder="internal-mcp"' in response.text
     assert 'placeholder="https://mcp.example.com/mcp"' in response.text
     assert "googlemcp" not in response.text
-    assert "googlemcp.supergeoff.top" not in response.text
+    assert "upstream-mcp.example.com" not in response.text
 
 
 async def test_admin_renders_litellm_upstream_health_check(settings, fake_repository) -> None:
@@ -758,7 +758,7 @@ async def test_admin_adds_direct_passthrough_mcp(settings, fake_repository) -> N
                 "direct_url": "https://googlemcp.example.com/mcp/",
                 "auth_mode": "passthrough",
                 "auth_type": "oauth2",
-                "required_headers": "Authorization, X-GOOGLE-WORKSPACE, X-GOOGLE-ORG",
+                "required_headers": "Authorization, X-GOOGLE-WORKSPACE, X-GOOGLE-ORG, X-LiteLLM-Api-Key",
                 "static_headers": "X-UPSTREAM-TOKEN: upstream-secret",
             },
             follow_redirects=False,
@@ -767,13 +767,83 @@ async def test_admin_adds_direct_passthrough_mcp(settings, fake_repository) -> N
     assert response.status_code == 303
     assert fake_repository.mcp_servers["googlemcp"] == McpServerConfiguration(
         name="googlemcp",
-        required_headers=("Authorization", "X-GOOGLE-ORG", "X-GOOGLE-WORKSPACE"),
+        required_headers=("Authorization", "X-GOOGLE-ORG", "X-GOOGLE-WORKSPACE", "X-LiteLLM-Api-Key"),
         delegated_auth_passthrough=True,
         auth_type="oauth2",
         source="direct",
         direct_url="https://googlemcp.example.com/mcp",
         static_headers={"X-UPSTREAM-TOKEN": "upstream-secret"},
     )
+
+
+async def test_direct_mcp_allows_litellm_named_header_as_upstream_secret(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "generic": McpServerConfiguration(
+            name="generic",
+            required_headers=("X-LiteLLM-Api-Key",),
+            delegated_auth_passthrough=False,
+            source="direct",
+            direct_url="https://generic.example.com/mcp",
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "user@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/secret",
+            data={
+                "mcp_name": "generic",
+                "header_name": "X-LiteLLM-Api-Key",
+                "value": "direct-upstream-key",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert fake_repository.secrets["generic"] == {
+        "X-LiteLLM-Api-Key": "direct-upstream-key"
+    }
+
+
+async def test_litellm_mcp_rejects_managed_litellm_header_as_user_secret(settings, fake_repository) -> None:
+    fake_repository.mcp_servers = {
+        "generic": McpServerConfiguration(
+            name="generic",
+            required_headers=(),
+            delegated_auth_passthrough=False,
+            source="litellm",
+        )
+    }
+    app = create_app(settings=settings, repository=fake_repository)
+    cookie = _session_cookie(
+        settings.session_secret,
+        {"user": {"sub": "pocket-sub", "email": "user@example.com"}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set("session", cookie)
+        response = await client.post(
+            "/api/secret",
+            data={
+                "mcp_name": "generic",
+                "header_name": "X-LiteLLM-Api-Key",
+                "value": "must-not-override-managed-key",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "generic" not in fake_repository.secrets
 
 
 async def test_admin_deletes_direct_mcp(settings, fake_repository) -> None:
@@ -852,7 +922,7 @@ async def test_admin_checks_litellm_upstream_health(settings, fake_repository) -
                 ],
                 "unhealthy_endpoints": [
                     {
-                        "model": "claude-sonnet",
+                        "model": "sonnet-model",
                         "api_base": "https://api.anthropic.com",
                         "error": "401 upstream auth failed",
                     }
@@ -877,7 +947,7 @@ async def test_admin_checks_litellm_upstream_health(settings, fake_repository) -
     assert response.status_code == 200
     assert captured == {"path": "/health", "authorization": "Bearer admin-read-key"}
     assert "gpt-4o-mini" in response.text
-    assert "claude-sonnet" in response.text
+    assert "sonnet-model" in response.text
     assert "healthy" in response.text
     assert "unhealthy" in response.text
     assert "401 upstream auth failed" in response.text

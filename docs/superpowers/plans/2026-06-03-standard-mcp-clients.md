@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make mcp-broker work with standard MCP Streamable HTTP clients beyond Claude Code while keeping the public endpoint shape `/{mcp_name}`.
+**Goal:** Make mcp-broker work with standard MCP Streamable HTTP clients beyond standard MCP client while keeping the public endpoint shape `/{mcp_name}`.
 
 **Architecture:** Keep FastAPI routing as-is for public MCP endpoints and update only client-specific assumptions. Parse `EXPECTED_AUDIENCE` as one or more accepted JWT audiences, pass that list to `JwtValidator`, and make docs/UI/tests describe generic AI clients.
 
@@ -18,8 +18,8 @@
 - Modify `tests/test_config.py`: cover comma-separated `EXPECTED_AUDIENCE`.
 - Modify `tests/test_jwt_validator.py`: cover multiple accepted audiences and rejected unknown audiences.
 - Modify `tests/conftest.py`: use a generic MCP audience in fixtures.
-- Modify `tests/test_oauth_metadata.py`: rename Claude-specific test language.
-- Modify `mcp_broker/templates/dashboard.html`: replace Claude-only copy with generic AI-client copy.
+- Modify `tests/test_oauth_metadata.py`: rename client-specific test language.
+- Modify `mcp_broker/templates/dashboard.html`: replace client-specific copy with generic AI-client copy.
 - Modify `README.md`: document standard MCP clients and `/{mcp_name}` URLs.
 - Modify `.env.example`: document comma-separated `EXPECTED_AUDIENCE`.
 
@@ -127,7 +127,7 @@ Expected: all tests in those files pass.
 
 - [ ] **Step 1: Update test and fixture wording**
 
-Rename test functions and fixture values from Claude-specific names to generic MCP-client names:
+Rename test functions and fixture values from client-specific names to generic MCP-client names:
 
 ```python
 expected_audience="broker-mcp-client"
@@ -144,7 +144,7 @@ async def test_named_protected_resource_metadata_points_clients_to_pocket_id(...
 Replace:
 
 ```html
-Configure LiteLLM access and per-MCP secret headers for claude.ai.
+Configure LiteLLM access and per-MCP secret headers for standard MCP clients.
 ```
 
 With:
@@ -158,20 +158,20 @@ Configure LiteLLM access and per-MCP secret headers for AI clients.
 Document the standard client URL shape:
 
 ```text
-https://your-broker-domain.example/dokploy
-https://your-broker-domain.example/context7
+https://your-broker-domain.example/deploy-tools
+https://your-broker-domain.example/internal-tools
 ```
 
 Document `EXPECTED_AUDIENCE` as:
 
 ```text
-EXPECTED_AUDIENCE=broker-mcp-client,https://your-broker-domain.example/dokploy
+EXPECTED_AUDIENCE=broker-mcp-client,https://your-broker-domain.example/deploy-tools
 ```
 
-- [ ] **Step 4: Search for leftover Claude-only references**
+- [ ] **Step 4: Search for leftover client-specific references**
 
-Run: `grep -R -n -i claude README.md .env.example mcp_broker tests`
-Expected: no product-copy references that imply the broker only supports Claude. Test data can mention Claude only when explicitly testing backwards-compatible audience migration.
+Run: `grep -R -n -i client-name README.md .env.example mcp_broker tests`
+Expected: no product-copy references that imply the broker only supports standard MCP client. Test data can mention standard MCP client only when explicitly testing backwards-compatible audience migration.
 
 - [ ] **Step 5: Run focused docs/copy-related tests**
 

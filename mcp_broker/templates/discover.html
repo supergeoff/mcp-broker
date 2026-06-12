@@ -31,7 +31,7 @@
             {% endif %}
           </div>
           {% if server.delegated_auth_passthrough %}
-            <p class="server-note">No client ID or client secret needed in Claude or OpenWebUI. This MCP sends the client through its own OAuth flow.</p>
+            <p class="server-note">No broker client credentials needed. This MCP sends the client through its own OAuth flow.</p>
           {% endif %}
           {% if health and health.detail %}
             <p class="server-note server-health-note">{{ health.detail }}</p>

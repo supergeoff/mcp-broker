@@ -28,6 +28,11 @@ REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"authorization", "content-length", "ho
 DELEGATED_REQUEST_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "host", "x-litellm-api-key"}
 DIRECT_LITELLM_SECRET_BLOCKLIST = (REQUEST_BLOCKLIST - {"authorization"}) | {"x-litellm-api-key"}
 RESPONSE_BLOCKLIST = HOP_BY_HOP_HEADERS | {"content-length", "content-encoding", "set-cookie"}
+OAUTH_ENDPOINT_METADATA_FIELDS = {
+    "authorize": "authorization_endpoint",
+    "token": "token_endpoint",
+    "register": "registration_endpoint",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -178,14 +183,18 @@ async def proxy_direct_oauth_endpoint_request(
     if not server.direct_url:
         raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
     body = await request.body()
+    headers = _direct_upstream_headers(request.headers, server)
+    upstream_url = await _direct_oauth_endpoint_url(
+        server=server,
+        endpoint=endpoint,
+        query=_rewrite_direct_oauth_resource_params(request.url.query, settings, server),
+        headers=headers,
+        http_client=http_client,
+    )
     upstream_request = http_client.build_request(
         request.method,
-        _direct_oauth_url(
-            server.direct_url,
-            endpoint,
-            _rewrite_direct_oauth_resource_params(request.url.query, settings, server),
-        ),
-        headers=_direct_upstream_headers(request.headers, server),
+        upstream_url,
+        headers=_direct_oauth_headers(headers, upstream_url),
         content=_rewrite_direct_oauth_form_body(
             body,
             request.headers.get("content-type"),
@@ -359,7 +368,7 @@ def _direct_upstream_headers(
         return headers
 
     upstream_origin = _url_origin(httpx.URL(server.direct_url))
-    # Direct FastMCP OAuth upstreams validate Origin against their own origin.
+    # Direct OAuth upstreams may validate Origin against their own origin.
     headers = {
         name: value
         for name, value in headers.items()
@@ -367,6 +376,17 @@ def _direct_upstream_headers(
     }
     headers["origin"] = upstream_origin
     return headers
+
+
+def _direct_oauth_headers(headers: dict[str, str], upstream_url: httpx.URL) -> dict[str, str]:
+    return {
+        **{
+            name: value
+            for name, value in headers.items()
+            if name.lower() != "origin"
+        },
+        "origin": _url_origin(upstream_url),
+    }
 
 
 def _direct_mcp_url(direct_url: str, subpath: str, query: str) -> httpx.URL:
@@ -385,6 +405,69 @@ def _direct_oauth_url(direct_url: str, endpoint: str, query: str) -> httpx.URL:
     parent = url.path.rstrip("/").rsplit("/", 1)[0]
     path = f"{parent}/{endpoint}" if parent else f"/{endpoint}"
     return url.copy_with(path=path, query=query.encode("utf-8"))
+
+
+async def _direct_oauth_endpoint_url(
+    *,
+    server: McpServerConfiguration,
+    endpoint: str,
+    query: str,
+    headers: dict[str, str],
+    http_client: httpx.AsyncClient,
+) -> httpx.URL:
+    metadata_field = OAUTH_ENDPOINT_METADATA_FIELDS.get(endpoint)
+    if metadata_field:
+        metadata_url = await _direct_oauth_metadata_endpoint_url(
+            server=server,
+            metadata_field=metadata_field,
+            headers=headers,
+            http_client=http_client,
+        )
+        if metadata_url is not None:
+            return metadata_url.copy_with(query=query.encode("utf-8"))
+
+    if not server.direct_url:
+        raise HTTPException(status_code=500, detail="Direct MCP server is missing direct_url")
+    return _direct_oauth_url(server.direct_url, endpoint, query)
+
+
+async def _direct_oauth_metadata_endpoint_url(
+    *,
+    server: McpServerConfiguration,
+    metadata_field: str,
+    headers: dict[str, str],
+    http_client: httpx.AsyncClient,
+) -> httpx.URL | None:
+    if not server.direct_url:
+        return None
+
+    for upstream_url in _direct_metadata_urls(server.direct_url, "oauth-authorization-server", ""):
+        try:
+            upstream_response = await http_client.get(upstream_url, headers=headers)
+        except httpx.HTTPError:
+            continue
+        if upstream_response.status_code >= 400:
+            continue
+        try:
+            payload = upstream_response.json()
+        except ValueError:
+            continue
+        endpoint_url = _metadata_endpoint_url(payload, metadata_field)
+        if endpoint_url is not None:
+            return endpoint_url
+    return None
+
+
+def _metadata_endpoint_url(payload: object, metadata_field: str) -> httpx.URL | None:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(metadata_field)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    url = httpx.URL(value.strip())
+    if url.scheme not in {"http", "https"} or not url.host:
+        return None
+    return url
 
 
 def _rewrite_direct_oauth_form_body(

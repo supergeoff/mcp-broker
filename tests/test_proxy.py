@@ -148,9 +148,9 @@ async def test_litellm_proxy_logs_secret_header_names_without_values_on_auth_fai
         settings=settings,
         repository=FakeRepository(
             secrets={
-                "openwebui": {
-                    "Authorization": "Bearer upstream-openwebui-token",
-                    "X-OpenWebUI-API-Key": "openwebui-secret",
+                "custommcp": {
+                    "Authorization": "Bearer upstream-custom-token",
+                    "X-Custom-MCP-API-Key": "custom-secret",
                 }
             }
         ),
@@ -164,19 +164,19 @@ async def test_litellm_proxy_logs_secret_header_names_without_values_on_auth_fai
         base_url="http://testserver",
     ) as client:
         response = await client.post(
-            "/openwebui",
+            "/custommcp",
             headers={"Authorization": "Bearer oauth-access-token"},
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}},
         )
 
     assert response.status_code == 401
-    assert "mcp=openwebui" in caplog.text
+    assert "mcp=custommcp" in caplog.text
     assert "method=tools/call" in caplog.text
     assert "upstream_status=401" in caplog.text
     assert "Authorization" in caplog.text
-    assert "X-OpenWebUI-API-Key" in caplog.text
-    assert "upstream-openwebui-token" not in caplog.text
-    assert "openwebui-secret" not in caplog.text
+    assert "X-Custom-MCP-API-Key" in caplog.text
+    assert "upstream-custom-token" not in caplog.text
+    assert "custom-secret" not in caplog.text
     assert "oauth-access-token" not in caplog.text
 
 
@@ -581,6 +581,8 @@ async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(setti
                 dict(request.headers),
             )
         )
+        if request.url.path.startswith("/.well-known/"):
+            return httpx.Response(404, content=b"missing")
         if request.url.path == "/authorize":
             return httpx.Response(302, headers={"location": "https://accounts.google.com/o/oauth2/v2/auth"})
         return httpx.Response(200, json={"access_token": "upstream-token"})
@@ -631,20 +633,136 @@ async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(setti
     assert authorize_response.status_code == 302
     assert authorize_response.headers["location"] == "https://accounts.google.com/o/oauth2/v2/auth"
     assert token_response.status_code == 200
-    assert captured[0][0] == "GET"
-    assert captured[0][1] == "/authorize"
-    assert captured[0][2] == (
+    assert [item[1] for item in captured] == [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+        "/.well-known/openid-configuration",
+        "/authorize",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+        "/.well-known/openid-configuration",
+        "/token",
+    ]
+    assert captured[3][0] == "GET"
+    assert captured[3][2] == (
         "client_id=standard-mcp-client&resource=https%3A%2F%2Fgooglemcp.example.com%2Fmcp"
     )
-    assert captured[1][0] == "POST"
-    assert captured[1][1] == "/token"
-    assert captured[1][3] == (
+    assert captured[7][0] == "POST"
+    assert captured[7][3] == (
         b"grant_type=authorization_code&code=abc"
         b"&resource=https%3A%2F%2Fgooglemcp.example.com%2Fmcp"
     )
-    assert captured[0][4]["origin"] == "https://googlemcp.example.com"
-    assert captured[1][4]["origin"] == "https://googlemcp.example.com"
-    assert "referer" not in captured[0][4]
-    assert "referer" not in captured[1][4]
-    assert "x-litellm-api-key" not in captured[0][4]
-    assert "x-litellm-api-key" not in captured[1][4]
+    assert captured[3][4]["origin"] == "https://googlemcp.example.com"
+    assert captured[7][4]["origin"] == "https://googlemcp.example.com"
+    assert "referer" not in captured[3][4]
+    assert "referer" not in captured[7][4]
+    assert "x-litellm-api-key" not in captured[3][4]
+    assert "x-litellm-api-key" not in captured[7][4]
+
+
+async def test_direct_passthrough_oauth_endpoints_use_advertised_metadata_urls(settings) -> None:
+    captured: list[tuple[str, str, str, bytes, dict[str, str]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            (
+                request.method,
+                request.url.path,
+                request.url.query.decode(),
+                await request.aread(),
+                dict(request.headers),
+            )
+        )
+        if request.url.path == "/.well-known/oauth-authorization-server":
+            return httpx.Response(404, content=b"missing")
+        if request.url.path == "/.well-known/oauth-authorization-server/mcp":
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": "https://generic.example.com/oauth2",
+                    "authorization_endpoint": "https://generic.example.com/oauth2/authorize",
+                    "token_endpoint": "https://generic.example.com/oauth2/token",
+                    "registration_endpoint": "https://generic.example.com/oauth2/register",
+                },
+            )
+        if request.url.path == "/oauth2/authorize":
+            return httpx.Response(302, headers={"location": "https://auth.example.com/continue"})
+        if request.url.path == "/oauth2/token":
+            return httpx.Response(200, json={"access_token": "upstream-token"})
+        if request.url.path == "/oauth2/register":
+            return httpx.Response(201, json={"client_id": "registered-client"})
+        return httpx.Response(500, content=f"unexpected {request.url.path}".encode())
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "generic": McpServerConfiguration(
+                    name="generic",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                    source="direct",
+                    direct_url="https://generic.example.com/mcp",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        follow_redirects=False,
+    ) as client:
+        authorize_response = await client.get(
+            "/generic/authorize?client_id=standard-mcp-client"
+            "&resource=https%3A%2F%2Fbroker.example.com%2Fgeneric",
+            headers={"Origin": "https://broker.example.com"},
+        )
+        token_response = await client.post(
+            "/generic/token",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": "https://broker.example.com",
+            },
+            content=(
+                b"grant_type=authorization_code&code=abc"
+                b"&resource=https%3A%2F%2Fbroker.example.com%2Fgeneric"
+            ),
+        )
+        register_response = await client.post(
+            "/generic/register",
+            headers={
+                "Content-Type": "application/json",
+                "Origin": "https://broker.example.com",
+            },
+            content=b'{"redirect_uris":["https://client.example.com/callback"]}',
+        )
+
+    assert authorize_response.status_code == 302
+    assert authorize_response.headers["location"] == "https://auth.example.com/continue"
+    assert token_response.status_code == 200
+    assert register_response.status_code == 201
+    assert [item[1] for item in captured] == [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+        "/oauth2/authorize",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+        "/oauth2/token",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+        "/oauth2/register",
+    ]
+    assert captured[2][2] == (
+        "client_id=standard-mcp-client&resource=https%3A%2F%2Fgeneric.example.com%2Fmcp"
+    )
+    assert captured[5][3] == (
+        b"grant_type=authorization_code&code=abc"
+        b"&resource=https%3A%2F%2Fgeneric.example.com%2Fmcp"
+    )
+    assert captured[8][3] == b'{"redirect_uris":["https://client.example.com/callback"]}'
+    assert captured[2][4]["origin"] == "https://generic.example.com"
+    assert captured[5][4]["origin"] == "https://generic.example.com"
+    assert captured[8][4]["origin"] == "https://generic.example.com"

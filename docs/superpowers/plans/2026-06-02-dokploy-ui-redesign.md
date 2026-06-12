@@ -174,7 +174,7 @@ The existing dashboard save-secret tests should still pass.
 
 ---
 
-### Task 2: Add Shared Dokploy Shell
+### Task 2: Add Shared App Shell
 
 **Files:**
 - Create: `mcp_broker/templates/_shell.html`
@@ -409,7 +409,7 @@ Replace `mcp_broker/templates/dashboard.html` with:
   <header class="page-header">
     <div>
       <h1 class="page-title">Dashboard</h1>
-      <p class="page-description">Configure LiteLLM access and per-MCP secret headers for claude.ai.</p>
+      <p class="page-description">Configure LiteLLM access and per-MCP secret headers for standard MCP clients.</p>
     </div>
     {% if litellm_key_saved %}
       <span class="status-badge status-saved">LiteLLM key saved</span>

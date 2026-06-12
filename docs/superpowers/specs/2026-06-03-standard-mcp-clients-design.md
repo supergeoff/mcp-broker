@@ -4,7 +4,7 @@ Date: 2026-06-03
 
 ## Goal
 
-Make mcp-broker work with any AI client that supports standard HTTP MCP authorization and Streamable HTTP, including Claude Code and Open WebUI.
+Make mcp-broker work with any AI client that supports standard HTTP MCP authorization and Streamable HTTP, including standard MCP client and another standard MCP client.
 
 The public client contract remains one simple URL per LiteLLM MCP server:
 
@@ -17,7 +17,7 @@ This is standard-compatible because the MCP specification requires a single HTTP
 
 ## Scope
 
-Update the broker so the existing `/{mcp_name}` route is the only public MCP endpoint for each server, while removing Claude-specific assumptions from naming, documentation, and token validation.
+Update the broker so the existing `/{mcp_name}` route is the only public MCP endpoint for each server, while removing client-specific assumptions from naming, documentation, and token validation.
 
 In scope:
 
@@ -84,7 +84,7 @@ Unauthenticated or invalid-token MCP requests return a 401 challenge with:
 WWW-Authenticate: Bearer resource_metadata="https://broker.example.com/.well-known/oauth-protected-resource/dokploy"
 ```
 
-This lets standard MCP clients discover Pocket ID without hardcoding Claude-specific behavior.
+This lets standard MCP clients discover Pocket ID without hardcoding client-specific behavior.
 
 ## JWT Audience
 
@@ -96,7 +96,7 @@ Configuration behavior:
 - The value can be a comma-separated list.
 - Each token is accepted if its `aud` claim matches any configured audience.
 
-Deployments can therefore keep a Claude-specific audience during migration, or configure a broker resource audience shared by standard MCP clients.
+Deployments can therefore keep a client-specific audience during migration, or configure a broker resource audience shared by standard MCP clients.
 
 ## Broker-Managed MCP Flow
 
@@ -138,7 +138,7 @@ Use test-first implementation for behavior changes.
 
 Planned tests:
 
-- Metadata for `/{mcp_name}` advertises a generic protected resource, not a Claude-only client.
+- Metadata for `/{mcp_name}` advertises a generic protected resource, not a client-specific client.
 - OAuth challenge points to the server-specific protected resource metadata.
 - Proxying `/{mcp_name}` still forwards to LiteLLM `/{mcp_name}/mcp`.
 - Subpaths still forward under LiteLLM `/{mcp_name}/mcp/{subpath}`.
@@ -150,7 +150,7 @@ Planned tests:
 ## Acceptance Criteria
 
 - A standard MCP Streamable HTTP client can be configured with `https://broker.example.com/{mcp_name}`.
-- Open WebUI can use the same per-server URL shape as Claude Code.
+- another standard MCP client can use the same per-server URL shape as standard MCP client.
 - The broker has no public `/mcp/{mcp_name}` route.
 - Existing per-user LiteLLM key and secret-header injection behavior is preserved.
 - Existing delegated-auth passthrough behavior is preserved.
