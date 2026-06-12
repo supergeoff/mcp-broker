@@ -1,4 +1,5 @@
 import logging
+from hashlib import sha256
 
 import httpx
 import pytest
@@ -180,18 +181,17 @@ async def test_litellm_proxy_logs_secret_header_names_without_values_on_auth_fai
     assert "oauth-access-token" not in caplog.text
 
 
-async def test_named_mcp_public_subpath_uses_litellm_server_mcp_root(settings) -> None:
+async def test_named_mcp_subpath_routes_under_litellm_server_mcp(settings) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
         captured["path"] = request.url.path
         captured["query"] = request.url.query.decode()
-        captured["headers"] = dict(request.headers)
         return httpx.Response(200, content=b"ok")
 
     app = create_app(
         settings=settings,
-        repository=FakeRepository(secrets={"hindsight": {"X-Bank-Id": "geoff"}}),
+        repository=FakeRepository(secrets={"context7": {"X-CONTEXT7-API-KEY": "context7-key"}}),
         jwt_validator=FakeJwtValidator(),
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
@@ -201,15 +201,74 @@ async def test_named_mcp_public_subpath_uses_litellm_server_mcp_root(settings) -
         base_url="http://testserver",
     ) as client:
         response = await client.get(
-            "/hindsight/geoff?cursor=abc",
+            "/context7/events?cursor=abc",
             headers={"Authorization": "Bearer oauth-access-token"},
         )
 
     assert response.status_code == 200
-    assert captured["path"] == "/hindsight/mcp"
+    assert captured["path"] == "/context7/mcp/events"
     assert captured["query"] == "cursor=abc"
-    assert captured["headers"]["x-bank-id"] == "geoff"
-    assert captured["headers"]["x-mcp-hindsight-x-bank-id"] == "geoff"
+
+
+async def test_hindsight_bank_path_routes_through_litellm_bank_server(settings) -> None:
+    captured: dict[str, object] = {}
+    bank_server_name = f"hindsight-bank-{sha256('tartanpion'.encode('utf-8')).hexdigest()[:16]}"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1/mcp/server":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "server_id": "base-hindsight-id",
+                        "server_name": "hindsight",
+                        "url": "https://api.hindsight.example.com/mcp",
+                        "transport": "http",
+                        "auth_type": "none",
+                        "static_headers": {"Authorization": "Basic upstream-secret"},
+                        "mcp_access_groups": ["All"],
+                        "available_on_public_internet": True,
+                    }
+                ],
+            )
+        if request.method == "POST" and request.url.path == "/v1/mcp/server":
+            captured["created_server"] = await request.aread()
+            return httpx.Response(
+                201,
+                json={
+                    "server_id": "bank-hindsight-id",
+                    "server_name": bank_server_name,
+                    "url": "https://api.hindsight.example.com/mcp/tartanpion",
+                },
+            )
+        captured["path"] = request.url.path
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, content=b"ok")
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(secrets={"hindsight": {"X-Bank-Id": "wrong-bank"}}),
+        jwt_validator=FakeJwtValidator(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/hindsight/tartanpion",
+            headers={"Authorization": "Bearer oauth-access-token"},
+            content=b"{}",
+        )
+
+    assert response.status_code == 200
+    assert captured["path"] == f"/{bank_server_name}/mcp"
+    assert captured["headers"]["x-bank-id"] == "tartanpion"
+    assert captured["headers"]["x-mcp-hindsight-x-bank-id"] == "tartanpion"
+    assert b'"server_name":"' + bank_server_name.encode("utf-8") + b'"' in captured["created_server"]
+    assert b'"url":"https://api.hindsight.example.com/mcp/tartanpion"' in captured["created_server"]
+    assert b'"Authorization":"Basic upstream-secret"' in captured["created_server"]
 
 
 async def test_proxy_returns_412_when_user_vault_is_not_ready(settings) -> None:

@@ -20,6 +20,7 @@ from mcp_broker.discovery import DiscoveryClient
 from mcp_broker.litellm_health import LiteLLMHealthClient
 from mcp_broker.mcp_health import McpToolHealth, McpToolsHealthClient, health_unknown
 from mcp_broker.models import Base
+from mcp_broker.proxy import ensure_hindsight_bank_litellm_server
 from mcp_broker.proxy import proxy_delegated_litellm_request, proxy_delegated_mcp_request
 from mcp_broker.proxy import proxy_delegated_oauth_metadata_request, proxy_mcp_request
 from mcp_broker.proxy import proxy_direct_broker_mcp_request, proxy_direct_oauth_endpoint_request
@@ -476,6 +477,26 @@ def create_app(
                 repository=_repository(app),
                 http_client=_http_client(app),
             )
+        if mcp_name == "hindsight" and subpath:
+            bank_id = _normalize_hindsight_bank_id(subpath)
+            litellm_mcp_name = await ensure_hindsight_bank_litellm_server(
+                bank_id=bank_id,
+                settings=settings,
+                http_client=_http_client(app),
+            )
+            secrets = await _repository(app).get_secrets(claims["sub"], mcp_name)
+            secrets = {**secrets, "X-Bank-Id": bank_id}
+            return await proxy_mcp_request(
+                request=request,
+                mcp_name=mcp_name,
+                subpath="",
+                user_sub=claims["sub"],
+                settings=settings,
+                repository=_repository(app),
+                http_client=_http_client(app),
+                litellm_mcp_name=litellm_mcp_name,
+                secrets_override=secrets,
+            )
         return await proxy_mcp_request(
             request=request,
             mcp_name=mcp_name,
@@ -572,6 +593,13 @@ def _normalize_mcp_subpath(value: str) -> str:
             detail="MCP subpath must use letters, numbers, dot, dash, or underscore",
         )
     return "/".join(segments)
+
+
+def _normalize_hindsight_bank_id(value: str) -> str:
+    bank_id = _normalize_mcp_subpath(value)
+    if "/" in bank_id:
+        raise HTTPException(status_code=400, detail="Hindsight bank id must be a single path segment")
+    return bank_id
 
 
 def _public_mcp_resource(settings: Settings, mcp_name: str, subpath: str = "") -> str:
