@@ -749,6 +749,56 @@ async def test_delegated_auth_oauth_endpoints_proxy_to_litellm_without_litellm_k
     assert "x-litellm-api-key" not in captured[1][3]
 
 
+async def test_delegated_auth_register_preserves_client_redirect_uris(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = await request.aread()
+        return httpx.Response(
+            201,
+            json={
+                "client_id": "registered-client",
+                "client_secret": "registered-secret",
+                "redirect_uris": ["https://litellm.example.com/callback"],
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "coder": McpServerConfiguration(
+                    name="coder",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    openwebui_callback = "https://openwebui.example.com/oauth/clients/mcp:coder/callback"
+    request_body = {
+        "client_name": "Open WebUI",
+        "redirect_uris": [openwebui_callback],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post("/coder/register", json=request_body)
+
+    assert response.status_code == 201
+    assert captured["path"] == "/coder/register"
+    assert json.loads(captured["body"]) == request_body
+    assert response.json()["redirect_uris"] == [openwebui_callback]
+
+
 async def test_delegated_auth_callback_proxies_to_litellm_with_oauth_cookie(settings) -> None:
     captured: dict[str, object] = {}
 

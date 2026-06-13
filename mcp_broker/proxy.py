@@ -118,6 +118,7 @@ async def proxy_delegated_litellm_request(
     tool_name_scope: tuple[str, str, str] | None = None,
     preserve_response_cookies: bool = False,
     response_headers_rewrite_mcp_name: str | None = None,
+    preserve_client_redirect_uris: bool = False,
 ) -> StreamingResponse:
     url = httpx.URL(f"{settings.litellm_base_url}{path}").copy_with(query=request.url.query.encode("utf-8"))
     body = await request.body()
@@ -129,6 +130,14 @@ async def proxy_delegated_litellm_request(
         content=upstream_body,
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
+    if preserve_client_redirect_uris:
+        response_body = await _delegated_registration_response_body(upstream_response, body)
+        return StreamingResponse(
+            _single_response_body(response_body),
+            status_code=upstream_response.status_code,
+            headers=_response_headers(upstream_response.headers, preserve_cookies=preserve_response_cookies),
+            background=BackgroundTask(upstream_response.aclose),
+        )
     if tool_name_scope is not None:
         return await _mcp_response(
             upstream_response,
@@ -736,6 +745,42 @@ async def _response_body(response: httpx.Response) -> AsyncIterator[bytes]:
         return
     async for chunk in response.aiter_raw():
         yield chunk
+
+
+async def _delegated_registration_response_body(response: httpx.Response, request_body: bytes) -> bytes:
+    body = await response.aread()
+    client_redirect_uris = _client_redirect_uris(request_body)
+    if not client_redirect_uris:
+        return body
+
+    payload = _json_payload(body)
+    if not isinstance(payload, dict):
+        return body
+
+    rewritten = dict(payload)
+    rewritten["redirect_uris"] = client_redirect_uris
+    if isinstance(rewritten.get("redirect_uri"), str) and len(client_redirect_uris) == 1:
+        rewritten["redirect_uri"] = client_redirect_uris[0]
+    if rewritten == payload:
+        return body
+    return json.dumps(rewritten, separators=(",", ":")).encode("utf-8")
+
+
+def _client_redirect_uris(request_body: bytes) -> list[str]:
+    payload = _json_payload(request_body)
+    if not isinstance(payload, dict):
+        return []
+
+    redirect_uris = payload.get("redirect_uris")
+    if isinstance(redirect_uris, list):
+        values = [item for item in redirect_uris if isinstance(item, str) and item]
+        if values:
+            return values
+
+    redirect_uri = payload.get("redirect_uri")
+    if isinstance(redirect_uri, str) and redirect_uri:
+        return [redirect_uri]
+    return []
 
 
 def _rewrite_tool_call_request_body(body: bytes, tool_name_scope: tuple[str, str, str]) -> bytes:

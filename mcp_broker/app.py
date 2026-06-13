@@ -520,6 +520,7 @@ def create_app(
             settings=settings,
             http_client=_http_client(app),
             preserve_response_cookies=True,
+            preserve_client_redirect_uris=endpoint == "register",
         )
 
     return app
