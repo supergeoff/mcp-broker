@@ -607,6 +607,47 @@ async def test_delegated_auth_mcp_proxies_without_pocket_id_and_preserves_author
     assert "x-litellm-api-key" not in captured["headers"]
 
 
+async def test_delegated_auth_mcp_rewrites_oauth_challenge_metadata(settings) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": "invalid_token"},
+            headers={
+                "www-authenticate": (
+                    'Bearer error="invalid_token", '
+                    'resource_metadata="https://litellm.example.com/.well-known/oauth-protected-resource/github/mcp"'
+                )
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(
+            mcp_servers={
+                "github": McpServerConfiguration(
+                    name="github",
+                    required_headers=(),
+                    delegated_auth_passthrough=True,
+                    auth_type="oauth2",
+                )
+            }
+        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post("/github", content=b"{}")
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == (
+        'Bearer error="invalid_token", '
+        'resource_metadata="https://broker.example.com/.well-known/oauth-protected-resource/github"'
+    )
+
+
 async def test_delegated_auth_metadata_is_proxied_to_litellm_legacy_mcp_oauth_endpoint(settings) -> None:
     captured: dict[str, object] = {}
 
@@ -659,7 +700,13 @@ async def test_delegated_auth_oauth_endpoints_proxy_to_litellm_without_litellm_k
     async def handler(request: httpx.Request) -> httpx.Response:
         captured.append((request.method, request.url.path, await request.aread(), dict(request.headers)))
         if request.url.path == "/github/authorize":
-            return httpx.Response(302, headers={"location": "https://oauth.example.com/authorize"})
+            return httpx.Response(
+                302,
+                headers={
+                    "location": "https://oauth.example.com/authorize",
+                    "set-cookie": "litellm_oauth_state=state; Path=/; HttpOnly; SameSite=Lax",
+                },
+            )
         return httpx.Response(200, json={"access_token": "token"})
 
     app = create_app(
@@ -691,6 +738,7 @@ async def test_delegated_auth_oauth_endpoints_proxy_to_litellm_without_litellm_k
 
     assert authorize_response.status_code == 302
     assert authorize_response.headers["location"] == "https://oauth.example.com/authorize"
+    assert authorize_response.headers["set-cookie"].startswith("litellm_oauth_state=state")
     assert token_response.status_code == 200
     assert captured[0][0] == "GET"
     assert captured[0][1] == "/github/authorize"
@@ -699,6 +747,46 @@ async def test_delegated_auth_oauth_endpoints_proxy_to_litellm_without_litellm_k
     assert captured[1][2] == b"grant_type=authorization_code&code=abc"
     assert "x-litellm-api-key" not in captured[0][3]
     assert "x-litellm-api-key" not in captured[1][3]
+
+
+async def test_delegated_auth_callback_proxies_to_litellm_with_oauth_cookie(settings) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["query"] = request.url.query.decode()
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(
+            302,
+            headers={
+                "location": "https://openwebui.example.com/oauth/callback?code=client-code",
+                "set-cookie": "litellm_oauth_state=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+            },
+        )
+
+    app = create_app(
+        settings=settings,
+        repository=FakeRepository(),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        follow_redirects=False,
+    ) as client:
+        response = await client.get(
+            "/callback?code=upstream-code&state=opaque-state",
+            headers={"Cookie": "litellm_oauth_state=state"},
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://openwebui.example.com/oauth/callback?code=client-code"
+    assert response.headers["set-cookie"].startswith("litellm_oauth_state=;")
+    assert captured["path"] == "/callback"
+    assert captured["query"] == "code=upstream-code&state=opaque-state"
+    assert captured["headers"]["cookie"] == "litellm_oauth_state=state"
+    assert "x-litellm-api-key" not in captured["headers"]
 
 
 async def test_direct_passthrough_oauth_endpoints_map_to_upstream_siblings(settings) -> None:

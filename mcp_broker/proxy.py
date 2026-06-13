@@ -105,6 +105,7 @@ async def proxy_delegated_mcp_request(
             mcp_name,
             _authorization_scope(request.headers),
         ),
+        response_headers_rewrite_mcp_name=mcp_name,
     )
 
 
@@ -115,6 +116,8 @@ async def proxy_delegated_litellm_request(
     settings: Settings,
     http_client: httpx.AsyncClient,
     tool_name_scope: tuple[str, str, str] | None = None,
+    preserve_response_cookies: bool = False,
+    response_headers_rewrite_mcp_name: str | None = None,
 ) -> StreamingResponse:
     url = httpx.URL(f"{settings.litellm_base_url}{path}").copy_with(query=request.url.query.encode("utf-8"))
     body = await request.body()
@@ -131,11 +134,20 @@ async def proxy_delegated_litellm_request(
             upstream_response,
             request_body=body,
             tool_name_scope=tool_name_scope,
+            response_headers=(
+                _litellm_response_headers(
+                    upstream_response.headers,
+                    settings,
+                    response_headers_rewrite_mcp_name,
+                )
+                if response_headers_rewrite_mcp_name is not None
+                else None
+            ),
         )
     return StreamingResponse(
         _response_body(upstream_response),
         status_code=upstream_response.status_code,
-        headers=_response_headers(upstream_response.headers),
+        headers=_response_headers(upstream_response.headers, preserve_cookies=preserve_response_cookies),
         background=BackgroundTask(upstream_response.aclose),
     )
 
@@ -589,11 +601,12 @@ def _direct_metadata_urls(direct_url: str, metadata_kind: str, query: str) -> li
     return deduped
 
 
-def _response_headers(incoming: Mapping[str, str]) -> dict[str, str]:
+def _response_headers(incoming: Mapping[str, str], *, preserve_cookies: bool = False) -> dict[str, str]:
+    blocklist = RESPONSE_BLOCKLIST - {"set-cookie"} if preserve_cookies else RESPONSE_BLOCKLIST
     return {
         name: value
         for name, value in incoming.items()
-        if name.lower() not in RESPONSE_BLOCKLIST
+        if name.lower() not in blocklist
     }
 
 
@@ -604,6 +617,17 @@ def _direct_response_headers(
 ) -> dict[str, str]:
     return {
         name: _rewrite_direct_metadata_string(value, settings, server)
+        for name, value in _response_headers(incoming).items()
+    }
+
+
+def _litellm_response_headers(
+    incoming: Mapping[str, str],
+    settings: Settings,
+    mcp_name: str,
+) -> dict[str, str]:
+    return {
+        name: _rewrite_litellm_metadata_string(value, settings, mcp_name)
         for name, value in _response_headers(incoming).items()
     }
 
@@ -838,16 +862,20 @@ def _authorization_scope(headers: Mapping[str, str]) -> str:
 
 def _rewrite_litellm_metadata(value: object, settings: Settings, mcp_name: str) -> object:
     if isinstance(value, str):
-        rewritten = value.replace(settings.litellm_base_url, settings.public_url)
-        rewritten = rewritten.replace(f"/.well-known/oauth-protected-resource/{mcp_name}/mcp", f"/.well-known/oauth-protected-resource/{mcp_name}")
-        rewritten = rewritten.replace(f"/.well-known/oauth-authorization-server/{mcp_name}/mcp", f"/.well-known/oauth-authorization-server/{mcp_name}")
-        rewritten = rewritten.replace(f"/{mcp_name}/mcp", f"/{mcp_name}")
-        return rewritten
+        return _rewrite_litellm_metadata_string(value, settings, mcp_name)
     if isinstance(value, list):
         return [_rewrite_litellm_metadata(item, settings, mcp_name) for item in value]
     if isinstance(value, dict):
         return {key: _rewrite_litellm_metadata(item, settings, mcp_name) for key, item in value.items()}
     return value
+
+
+def _rewrite_litellm_metadata_string(value: str, settings: Settings, mcp_name: str) -> str:
+    rewritten = value.replace(settings.litellm_base_url, settings.public_url)
+    rewritten = rewritten.replace(f"/.well-known/oauth-protected-resource/{mcp_name}/mcp", f"/.well-known/oauth-protected-resource/{mcp_name}")
+    rewritten = rewritten.replace(f"/.well-known/oauth-authorization-server/{mcp_name}/mcp", f"/.well-known/oauth-authorization-server/{mcp_name}")
+    rewritten = rewritten.replace(f"/{mcp_name}/mcp", f"/{mcp_name}")
+    return rewritten
 
 
 def _rewrite_direct_metadata(value: object, settings: Settings, server: McpServerConfiguration) -> object:

@@ -435,6 +435,16 @@ def create_app(
     async def delegated_register(request: Request, mcp_name: str):
         return await _handle_delegated_oauth_endpoint(request, _normalize_mcp_name(mcp_name), "register")
 
+    @app.api_route("/callback", methods=["GET", "POST"])
+    async def delegated_oauth_callback(request: Request):
+        return await proxy_delegated_litellm_request(
+            request=request,
+            path="/callback",
+            settings=settings,
+            http_client=_http_client(app),
+            preserve_response_cookies=True,
+        )
+
     @app.api_route("/{mcp_name}", methods=["GET", "POST", "DELETE"])
     async def named_mcp_root(request: Request, mcp_name: str):
         return await _handle_mcp(request, _normalize_mcp_name(mcp_name), "")
@@ -509,6 +519,7 @@ def create_app(
             path=f"/{mcp_name}/{endpoint}",
             settings=settings,
             http_client=_http_client(app),
+            preserve_response_cookies=True,
         )
 
     return app
