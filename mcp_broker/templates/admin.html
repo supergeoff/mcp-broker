@@ -93,6 +93,11 @@
         <label for="direct-mcp-headers">Required headers</label>
         <input id="direct-mcp-headers" name="required_headers" list="common-secret-headers" autocomplete="off" placeholder="Authorization, X-API-Key">
       </div>
+      <div class="field">
+        <label for="direct-mcp-url-params">URL param secrets</label>
+        <input id="direct-mcp-url-params" name="url_param_secrets" autocomplete="off" placeholder="userToken">
+        <span class="field-hint">Secret names to inject as URL query parameters instead of headers (e.g. userToken for Penpot)</span>
+      </div>
       <div class="field field-wide">
         <label for="direct-mcp-static-headers">Static upstream headers</label>
         <textarea id="direct-mcp-static-headers" name="static_headers" rows="3" autocomplete="off" placeholder="Authorization: Basic ..."></textarea>
@@ -123,6 +128,9 @@
                 <p class="card-description">{{ server.direct_url }}</p>
                 {% if server.static_headers %}
                   <p class="card-description">Static headers: {{ server.static_headers.keys() | list | join(", ") }}</p>
+                {% endif %}
+                {% if server.url_param_secrets %}
+                  <p class="card-description">URL param secrets: {{ server.url_param_secrets | join(", ") }}</p>
                 {% endif %}
               </div>
               <form method="post" action="/api/mcp/direct/delete">

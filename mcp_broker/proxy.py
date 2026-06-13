@@ -155,10 +155,13 @@ async def proxy_direct_broker_mcp_request(
     body = await request.body()
     tool_name_scope = _tool_name_scope("direct-broker", server.name, user_sub)
     upstream_body = _rewrite_tool_call_request_body(body, tool_name_scope)
+    url_param_secret_names = set(server.url_param_secrets)
+    url_params = {name: value for name, value in secrets.items() if name in url_param_secret_names}
+    header_secrets = {name: value for name, value in secrets.items() if name not in url_param_secret_names}
     upstream_request = http_client.build_request(
         request.method,
-        _direct_mcp_url(server.direct_url, subpath, request.url.query),
-        headers=_direct_broker_upstream_headers(request.headers, secrets, server.static_headers),
+        _direct_mcp_url(server.direct_url, subpath, request.url.query, url_params or None),
+        headers=_direct_broker_upstream_headers(request.headers, header_secrets, server.static_headers),
         content=upstream_body,
     )
     upstream_response = await http_client.send(upstream_request, stream=True)
@@ -418,7 +421,12 @@ def _direct_oauth_headers(headers: dict[str, str], upstream_url: httpx.URL) -> d
     }
 
 
-def _direct_mcp_url(direct_url: str, subpath: str, query: str) -> httpx.URL:
+def _direct_mcp_url(
+    direct_url: str,
+    subpath: str,
+    query: str,
+    extra_params: dict[str, str] | None = None,
+) -> httpx.URL:
     url = httpx.URL(direct_url)
     base_path = url.path.rstrip("/")
     if subpath:
@@ -426,6 +434,9 @@ def _direct_mcp_url(direct_url: str, subpath: str, query: str) -> httpx.URL:
         path = f"{base_path}/{clean_subpath}" if base_path else f"/{clean_subpath}"
     else:
         path = base_path or "/"
+    if extra_params:
+        merged = parse_qsl(query, keep_blank_values=True) + list(extra_params.items())
+        query = urlencode(merged)
     return url.copy_with(path=path, query=query.encode("utf-8"))
 
 

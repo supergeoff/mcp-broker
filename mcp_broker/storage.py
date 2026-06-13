@@ -48,6 +48,7 @@ class McpServerConfiguration:
     source: str = MCP_SOURCE_LITELLM
     direct_url: str | None = None
     static_headers: dict[str, str] = field(default_factory=dict)
+    url_param_secrets: tuple[str, ...] = field(default_factory=tuple)
     active: bool = True
 
 
@@ -192,6 +193,7 @@ class VaultRepository:
                             source=MCP_SOURCE_LITELLM,
                             direct_url=None,
                             static_headers_json="{}",
+                            url_param_secrets_json="[]",
                             active=True,
                         )
                     )
@@ -202,6 +204,7 @@ class VaultRepository:
                     stored.source = MCP_SOURCE_LITELLM
                     stored.direct_url = None
                     stored.static_headers_json = "{}"
+                    stored.url_param_secrets_json = "[]"
                     stored.active = True
             rows = (
                 await session.scalars(
@@ -225,12 +228,14 @@ class VaultRepository:
                 source=MCP_SOURCE_DIRECT,
                 direct_url=server.direct_url,
                 static_headers=server.static_headers,
+                url_param_secrets=server.url_param_secrets,
             )
         )
         async with self._session_factory() as session:
             stored = await session.get(McpServer, normalized.name)
             required_headers_json = json.dumps(list(normalized.required_headers))
             static_headers_json = _encrypted_headers_json(normalized.static_headers, self._cipher)
+            url_param_secrets_json = json.dumps(list(normalized.url_param_secrets))
             if stored is None:
                 session.add(
                     McpServer(
@@ -241,6 +246,7 @@ class VaultRepository:
                         source=normalized.source,
                         direct_url=normalized.direct_url,
                         static_headers_json=static_headers_json,
+                        url_param_secrets_json=url_param_secrets_json,
                         active=True,
                     )
                 )
@@ -251,6 +257,7 @@ class VaultRepository:
                 stored.source = normalized.source
                 stored.direct_url = normalized.direct_url
                 stored.static_headers_json = static_headers_json
+                stored.url_param_secrets_json = url_param_secrets_json
                 stored.active = True
             await session.commit()
 
@@ -293,6 +300,7 @@ class VaultRepository:
                         source=MCP_SOURCE_LITELLM,
                         direct_url=None,
                         static_headers_json="{}",
+                        url_param_secrets_json="[]",
                         active=True,
                     )
                 )
@@ -340,13 +348,15 @@ def _normalize_mcp_server_configuration(server: McpServerConfiguration) -> McpSe
         raise ValueError("Direct MCP servers require a direct_url")
     if source == MCP_SOURCE_LITELLM:
         direct_url = None
-        static_headers = {}
+        static_headers: dict[str, str] = {}
+        url_param_secrets: tuple[str, ...] = ()
     else:
         static_headers = {
             str(name).strip(): str(value)
             for name, value in server.static_headers.items()
             if str(name).strip()
         }
+        url_param_secrets = tuple(sorted({s.strip() for s in server.url_param_secrets if s.strip()}))
 
     return McpServerConfiguration(
         name=server.name.strip(),
@@ -356,6 +366,7 @@ def _normalize_mcp_server_configuration(server: McpServerConfiguration) -> McpSe
         source=source,
         direct_url=direct_url,
         static_headers=dict(sorted(static_headers.items())),
+        url_param_secrets=url_param_secrets,
         active=server.active,
     )
 
@@ -365,6 +376,12 @@ def _mcp_server_configuration_from_row(row: McpServer, cipher: FernetCipher) -> 
         headers = json.loads(row.required_headers_json)
     except json.JSONDecodeError:
         headers = []
+    try:
+        url_param_secrets_raw = json.loads(row.url_param_secrets_json)
+        if not isinstance(url_param_secrets_raw, list):
+            url_param_secrets_raw = []
+    except (json.JSONDecodeError, AttributeError):
+        url_param_secrets_raw = []
     return McpServerConfiguration(
         name=row.name,
         required_headers=tuple(sorted(str(header) for header in headers if str(header).strip())),
@@ -373,6 +390,7 @@ def _mcp_server_configuration_from_row(row: McpServer, cipher: FernetCipher) -> 
         source=row.source or MCP_SOURCE_LITELLM,
         direct_url=row.direct_url,
         static_headers=_decrypted_headers_json(row.static_headers_json, cipher),
+        url_param_secrets=tuple(sorted(str(s) for s in url_param_secrets_raw if str(s).strip())),
         active=row.active,
     )
 

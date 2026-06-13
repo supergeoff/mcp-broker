@@ -397,6 +397,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="Auth mode must be broker or passthrough")
         required_headers = _parse_required_headers(str(form.get("required_headers", "")))
         static_headers = _parse_static_headers(str(form.get("static_headers", "")))
+        url_param_secrets = _parse_url_param_secrets(str(form.get("url_param_secrets", "")))
         auth_type = str(form.get("auth_type", "")).strip() or None
         await _repository(app).upsert_direct_mcp_server(
             McpServerConfiguration(
@@ -407,6 +408,7 @@ def create_app(
                 source=MCP_SOURCE_DIRECT,
                 direct_url=direct_url,
                 static_headers=static_headers,
+                url_param_secrets=url_param_secrets,
             )
         )
         return RedirectResponse("/admin", status_code=303)
@@ -634,6 +636,15 @@ def _parse_static_headers(value: str) -> dict[str, str]:
     return dict(sorted(headers.items()))
 
 
+def _parse_url_param_secrets(value: str) -> tuple[str, ...]:
+    params = tuple(normalize_secret_header_name(param) for param in value.split(","))
+    url_param_secrets = tuple(param for param in params if param)
+    invalid = [param for param in url_param_secrets if not is_valid_secret_header_name(param)]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid URL param secret: {invalid[0]}")
+    return tuple(sorted(set(url_param_secrets)))
+
+
 def _session_user(request: Request) -> dict[str, str] | None:
     user = request.session.get("user")
     return user if isinstance(user, dict) and "sub" in user else None
@@ -681,5 +692,7 @@ def _ensure_mcp_server_catalog_columns(connection: Connection) -> None:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN direct_url TEXT"))
     if "static_headers_json" not in columns:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN static_headers_json TEXT NOT NULL DEFAULT '{}'"))
+    if "url_param_secrets_json" not in columns:
+        connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN url_param_secrets_json TEXT NOT NULL DEFAULT '[]'"))
     if "active" not in columns:
         connection.execute(text("ALTER TABLE mcp_servers ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE"))
